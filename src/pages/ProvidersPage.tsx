@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select';
 
 const PROVIDERS: { value: LLMProvider; label: string; hint: string }[] = [
+  { value: 'lovable', label: '⚡ Lovable AI (Built-in)', hint: 'No API key needed' },
   { value: 'openai', label: 'OpenAI', hint: 'sk-...' },
   { value: 'anthropic', label: 'Anthropic', hint: 'sk-ant-...' },
   { value: 'gemini', label: 'Google Gemini', hint: 'AIza...' },
@@ -105,14 +106,23 @@ export default function ProvidersPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label>Label (optional)</Label>
-                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" />
-              </div>
-              <div>
-                <Label>API Key</Label>
-                <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} />
-              </div>
+              {newProvider === 'lovable' ? (
+                <div className="rounded-md border border-accent/20 bg-accent/5 p-3">
+                  <p className="text-xs text-foreground font-medium mb-1">⚡ No API key needed</p>
+                  <p className="text-xs text-muted-foreground">Lovable AI is built-in and ready to use. Just create an agent with "Lovable AI" as the provider and start chatting.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <Label>Label (optional)</Label>
+                    <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" />
+                  </div>
+                  <div>
+                    <Label>API Key</Label>
+                    <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} />
+                  </div>
+                </>
+              )}
               {(newProvider === 'custom' || newProvider === 'ollama' || newProvider === 'azure') && (
                 <div>
                   <Label>Base URL</Label>
@@ -155,16 +165,29 @@ export default function ProvidersPage() {
                   )}
                 </div>
               )}
-              <Button onClick={handleCreate} className="w-full">Save Provider</Button>
+              {newProvider === 'lovable' ? (
+                <Button onClick={() => setOpen(false)} className="w-full">Got it</Button>
+              ) : (
+                <Button onClick={handleCreate} className="w-full">Save Provider</Button>
+              )}
             </div>
           </DialogContent>
         </Dialog>
       </div>
 
+      {/* Lovable AI banner */}
+      <div className="rounded-lg border border-accent/20 bg-accent/5 p-4 mb-4 flex items-start gap-3">
+        <Sparkles className="h-5 w-5 text-accent shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-medium text-foreground">⚡ Lovable AI is ready to use</p>
+          <p className="text-xs text-muted-foreground mt-0.5">No API key needed. When creating an agent, select "Lovable AI" as the provider to use built-in models like Gemini 3 Flash and GPT-5.</p>
+        </div>
+      </div>
+
       <div className="space-y-3">
         {providers.length === 0 && (
-          <div className="text-center py-16 text-sm text-muted-foreground">
-            No providers configured. Add an API key to enable real LLM calls.
+          <div className="text-center py-10 text-sm text-muted-foreground">
+            No additional providers configured. You can already use Lovable AI without any keys.
           </div>
         )}
         {providers.map(p => (
