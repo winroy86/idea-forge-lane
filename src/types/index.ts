@@ -33,6 +33,13 @@ export interface Agent {
   updatedAt: string;
 }
 
+export interface RoomDocument {
+  id: string;
+  name: string;
+  content: string; // text content extracted from the file
+  addedAt: string;
+}
+
 export interface Room {
   id: string;
   title: string;
@@ -45,6 +52,7 @@ export interface Room {
   sequenceOrder?: string[];
   loopCount?: number;
   balanceSlider: number; // 0 = realistic debate, 100 = equal participation
+  documents: RoomDocument[];
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +65,7 @@ export interface Message {
   agentId: string | null; // null = user or system
   role: 'user' | 'agent' | 'system' | 'summarizer';
   content: string;
+  innerThoughts?: string; // agent's private reasoning (visible to user, not to other agents)
   timestamp: string;
   parentId?: string; // for branching
   metadata?: {
