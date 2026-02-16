@@ -25,8 +25,164 @@ const WEB_SEARCH_TOOL = {
   },
 };
 
+function decodeHTML(str: string): string {
+  return str
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&#x2F;/g, "/").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
+}
+
+// Wikipedia search — always works, no rate limits
+async function searchWikipedia(query: string): Promise<{ snippets: string[]; sources: string[] }> {
+  try {
+    // Search for pages
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=3&format=json&origin=*`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) return { snippets: [], sources: [] };
+
+    const searchData = await searchRes.json();
+    const results = searchData.query?.search || [];
+    if (results.length === 0) return { snippets: [], sources: [] };
+
+    const snippets: string[] = [];
+    const sources: string[] = [];
+
+    // Get full extracts for the top results
+    const titles = results.map((r: any) => r.title).join("|");
+    const extractUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles)}&prop=extracts&exintro=1&explaintext=1&exlimit=3&format=json&origin=*`;
+    const extractRes = await fetch(extractUrl);
+
+    if (extractRes.ok) {
+      const extractData = await extractRes.json();
+      const pages = extractData.query?.pages || {};
+      for (const pageId of Object.keys(pages)) {
+        const page = pages[pageId];
+        if (page.extract) {
+          const extract = page.extract.substring(0, 500);
+          snippets.push(`[${page.title}]: ${extract}`);
+          sources.push(`https://en.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, "_"))}`);
+        }
+      }
+    } else {
+      // Fallback to search snippets
+      for (const r of results) {
+        const snippet = r.snippet?.replace(/<[^>]+>/g, "").trim() || "";
+        snippets.push(`[${r.title}]: ${decodeHTML(snippet)}`);
+        sources.push(`https://en.wikipedia.org/wiki/${encodeURIComponent(r.title.replace(/ /g, "_"))}`);
+      }
+    }
+
+    console.log(`🔎 Wikipedia returned ${snippets.length} results for: "${query}"`);
+    return { snippets, sources };
+  } catch (err) {
+    console.error("Wikipedia error:", err);
+    return { snippets: [], sources: [] };
+  }
+}
+
+// Google search via HTML scraping
+async function searchGoogle(query: string): Promise<{ snippets: string[]; sources: string[] }> {
+  try {
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&num=5`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+    if (!res.ok) {
+      console.log(`Google returned ${res.status}`);
+      return { snippets: [], sources: [] };
+    }
+
+    const html = await res.text();
+    const snippets: string[] = [];
+    const sources: string[] = [];
+
+    // Extract href="/url?q=URL" patterns with h3 titles
+    let match;
+    const pattern = /href="\/url\?q=(https?:\/\/[^&"]+)&[^"]*"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+    while ((match = pattern.exec(html)) !== null && snippets.length < 5) {
+      const resultUrl = decodeURIComponent(match[1]);
+      const title = match[2].replace(/<[^>]+>/g, "").trim();
+      if (!resultUrl.includes("google.com") && title) {
+        snippets.push(`[${decodeHTML(title)}]: (web result)`);
+        sources.push(resultUrl);
+      }
+    }
+
+    // Also try direct URL pattern
+    if (snippets.length === 0) {
+      const directPattern = /<a[^>]*href="(https?:\/\/(?!www\.google)[^"]+)"[^>]*><h3[^>]*>([\s\S]*?)<\/h3>/gi;
+      while ((match = directPattern.exec(html)) !== null && snippets.length < 5) {
+        const title = match[2].replace(/<[^>]+>/g, "").trim();
+        if (title) {
+          snippets.push(`[${decodeHTML(title)}]: (web result)`);
+          sources.push(match[1]);
+        }
+      }
+    }
+
+    console.log(`🔎 Google returned ${snippets.length} results for: "${query}"`);
+    return { snippets, sources };
+  } catch (err) {
+    console.log(`Google search failed: ${err instanceof Error ? err.message : err}`);
+    return { snippets: [], sources: [] };
+  }
+}
+
 async function performWebSearch(query: string, apiKey: string): Promise<{ result: string; sources: string[] }> {
-  // Use Lovable AI to perform a research-style search
+  // Try Google first, then Wikipedia
+  let { snippets, sources } = await searchGoogle(query);
+
+  if (snippets.length === 0) {
+    console.log("Google failed, falling back to Wikipedia");
+    ({ snippets, sources } = await searchWikipedia(query));
+  }
+
+  // If both fail, use the LLM's own knowledge but be honest about it
+  if (snippets.length === 0) {
+    // Use LLM knowledge but clearly state it's from training data
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-lite",
+        messages: [
+          {
+            role: "system",
+            content: `Answer the query factually based on your training knowledge. Start with "Based on available knowledge:" and be specific with facts and data. If unsure, say so.`,
+          },
+          { role: "user", content: query },
+        ],
+        temperature: 0.2,
+        max_tokens: 1000,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        result: data.choices?.[0]?.message?.content || "No information available.",
+        sources: [],
+      };
+    }
+    return { result: `Could not retrieve information for "${query}".`, sources: [] };
+  }
+
+  // Synthesize with LLM
+  const searchContext = snippets.join("\n\n");
+
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -34,40 +190,28 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model: "google/gemini-2.5-flash-lite",
       messages: [
         {
           role: "system",
-          content: `You are a web research assistant. Answer the query with factual, up-to-date information.
-IMPORTANT RULES:
-- Provide specific facts, data, and details
-- Include source URLs where possible (real, verifiable URLs)
-- If you reference a website, article, or study, provide its URL
-- Format sources as a list at the end under "Sources:"
-- Be thorough but concise
-- If you're unsure about something, say so`,
+          content: `Synthesize the web search results into a clear, factual summary. Reference source numbers [1], [2], etc. Do NOT make up information.`,
         },
-        { role: "user", content: query },
+        {
+          role: "user",
+          content: `Query: "${query}"\n\nResults:\n${searchContext}\n\nSources:\n${sources.map((s, i) => `[${i + 1}] ${s}`).join("\n")}`,
+        },
       ],
-      temperature: 0.2,
-      max_tokens: 1500,
+      temperature: 0.1,
+      max_tokens: 1000,
     }),
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    console.error("Web search AI error:", res.status, errText);
-    return { result: `Search failed (${res.status}). Could not retrieve results.`, sources: [] };
+    return { result: `Search results:\n\n${searchContext}`, sources };
   }
 
   const data = await res.json();
-  const content = data.choices?.[0]?.message?.content || "No results found.";
-
-  // Extract URLs from the response
-  const urlRegex = /https?:\/\/[^\s)\]>"',]+/g;
-  const sources = [...new Set(content.match(urlRegex) || [])];
-
-  return { result: content, sources };
+  return { result: data.choices?.[0]?.message?.content || searchContext, sources };
 }
 
 serve(async (req) => {
@@ -134,7 +278,6 @@ serve(async (req) => {
     let data = await response.json();
     const toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> = [];
 
-    // Handle tool calling loop (max 3 iterations to prevent infinite loops)
     let iterations = 0;
     while (iterations < 3) {
       const choice = data.choices?.[0];
@@ -165,7 +308,6 @@ serve(async (req) => {
         }
       }
 
-      // Make follow-up call with tool results
       body.messages = updatedMessages;
       const followUp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
@@ -186,7 +328,6 @@ serve(async (req) => {
       iterations++;
     }
 
-    // Add tool calls info to the response
     if (toolCallsMade.length > 0) {
       data._toolCallsMade = toolCallsMade;
     }
