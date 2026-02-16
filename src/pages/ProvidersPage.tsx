@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
+import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,6 +39,28 @@ export default function ProvidersPage() {
   const [newLabel, setNewLabel] = useState('');
   const [newKey, setNewKey] = useState('');
   const [newBaseUrl, setNewBaseUrl] = useState('');
+  const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
+  const [ollamaDetecting, setOllamaDetecting] = useState(false);
+  const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'found' | 'notfound'>('idle');
+
+  const detectOllama = async (url?: string) => {
+    setOllamaDetecting(true);
+    setOllamaStatus('idle');
+    const models = await detectOllamaModels(url || newBaseUrl || 'http://localhost:11434');
+    setOllamaModels(models);
+    setOllamaStatus(models.length > 0 ? 'found' : 'notfound');
+    setOllamaDetecting(false);
+  };
+
+  useEffect(() => {
+    if (newProvider === 'ollama' && open) {
+      setNewBaseUrl('http://localhost:11434');
+      detectOllama('http://localhost:11434');
+    } else {
+      setOllamaModels([]);
+      setOllamaStatus('idle');
+    }
+  }, [newProvider, open]);
 
   const refresh = () => setProviders(getProviders());
   useEffect(refresh, []);
@@ -93,7 +116,43 @@ export default function ProvidersPage() {
               {(newProvider === 'custom' || newProvider === 'ollama' || newProvider === 'azure') && (
                 <div>
                   <Label>Base URL</Label>
-                  <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434/v1" />
+                  <div className="flex gap-2">
+                    <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434" />
+                    {newProvider === 'ollama' && (
+                      <Button variant="outline" size="icon" onClick={() => detectOllama()} disabled={ollamaDetecting}>
+                        {ollamaDetecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {newProvider === 'ollama' && (
+                <div>
+                  {ollamaDetecting && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Detecting Ollama...
+                    </div>
+                  )}
+                  {ollamaStatus === 'found' && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs text-green-600">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Ollama detected — {ollamaModels.length} model{ollamaModels.length !== 1 ? 's' : ''} available
+                      </div>
+                      <div className="rounded-md border border-border bg-muted/50 p-2 space-y-1 max-h-40 overflow-y-auto">
+                        {ollamaModels.map(m => (
+                          <div key={m.name} className="flex items-center justify-between text-xs">
+                            <span className="font-mono text-foreground">{m.name}</span>
+                            <span className="text-muted-foreground">{formatModelSize(m.size)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {ollamaStatus === 'notfound' && !ollamaDetecting && (
+                    <div className="flex items-center gap-1.5 text-xs text-destructive">
+                      <XCircle className="h-3.5 w-3.5" /> Could not reach Ollama at {newBaseUrl || 'http://localhost:11434'}
+                    </div>
+                  )}
                 </div>
               )}
               <Button onClick={handleCreate} className="w-full">Save Provider</Button>

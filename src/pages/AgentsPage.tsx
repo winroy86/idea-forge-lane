@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider } from '@/types';
-import { getAgents, upsertAgent, deleteAgent, generateId } from '@/lib/store';
+import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
+import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -62,6 +63,23 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
     }
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
+  const [ollamaLoading, setOllamaLoading] = useState(false);
+
+  useEffect(() => {
+    if (form.config.provider === 'ollama') {
+      setOllamaLoading(true);
+      const providers = getProviders();
+      const ollamaProvider = providers.find(p => p.provider === 'ollama' && p.isActive);
+      const baseUrl = form.config.baseUrl || ollamaProvider?.baseUrl || 'http://localhost:11434';
+      detectOllamaModels(baseUrl).then(models => {
+        setOllamaModels(models);
+        setOllamaLoading(false);
+      });
+    } else {
+      setOllamaModels([]);
+    }
+  }, [form.config.provider, form.config.baseUrl]);
 
   const update = (patch: Partial<Agent>) => setForm(prev => ({ ...prev, ...patch }));
   const updateConfig = (patch: Partial<AgentConfig>) =>
@@ -122,7 +140,24 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
             </div>
             <div>
               <Label>Model</Label>
-              <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="gpt-4" />
+              {form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
+                <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ollamaModels.map(m => (
+                      <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : form.config.provider === 'ollama' && ollamaLoading ? (
+                <div className="flex items-center gap-2 h-10 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Detecting models...
+                </div>
+              ) : (
+                <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="gpt-4" />
+              )}
             </div>
           </div>
           {(form.config.provider === 'custom' || form.config.provider === 'ollama') && (
