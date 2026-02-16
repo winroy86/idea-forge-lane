@@ -236,10 +236,19 @@ async function callLovableAI(
 
 // ---- Main entry point ----
 
+export interface ResearchLoopDetail {
+  loopNumber: number;
+  thoughts: string[];
+  filesWritten: { filename: string; scope: string; category: string }[];
+  searches: { query: string; sources: string[] }[];
+  status: 'running' | 'done';
+}
+
 export interface ResearchLoopProgress {
   currentLoop: number;
   totalLoops: number;
   activity: string;
+  completedLoops: ResearchLoopDetail[];
 }
 
 export async function callAgent(
@@ -273,8 +282,18 @@ export async function callAgent(
 
   // --- Research Loops (private iterations) ---
   if (researchLoops > 0 && agent.memoryEnabled) {
+    const completedLoops: ResearchLoopDetail[] = [];
+
     for (let loop = 1; loop <= researchLoops; loop++) {
-      onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: 'Researching...' });
+      const currentDetail: ResearchLoopDetail = {
+        loopNumber: loop,
+        thoughts: [],
+        filesWritten: [],
+        searches: [],
+        status: 'running',
+      };
+      completedLoops.push(currentDetail);
+      onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: 'Researching...', completedLoops: [...completedLoops] });
 
       const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
       const researchSystem = `${system}
@@ -310,11 +329,12 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
       // Parse and execute memory actions
       const lines = loopResult.content.split('\n');
       let loopSummary = `**🔄 Research Loop ${loop}/${researchLoops}:**\n`;
-      const scope = roomId || 'global';
 
       for (const line of lines) {
         if (line.startsWith('THINK:')) {
-          loopSummary += `💭 ${line.slice(6).trim()}\n`;
+          const thought = line.slice(6).trim();
+          currentDetail.thoughts.push(thought);
+          loopSummary += `💭 ${thought}\n`;
         } else if (line.startsWith('WRITE_MEMORY|')) {
           const parts = line.split('|');
           if (parts.length >= 5) {
@@ -323,7 +343,8 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
             const category = parts[3] as any;
             const content = parts.slice(4).join('|').replace(/\\n/g, '\n');
             writeMemoryFile(agent.id, memScope, filename, content, category);
-            onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: `Writing ${filename}...` });
+            currentDetail.filesWritten.push({ filename, scope: memScope, category });
+            onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: `Writing ${filename}...`, completedLoops: [...completedLoops] });
             loopSummary += `📝 Wrote: ${filename} (${memScope}, ${category})\n`;
           }
         }
@@ -332,6 +353,7 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
       // Track tool calls from research loop
       if (loopResult.toolCallsMade && loopResult.toolCallsMade.length > 0) {
         for (const tc of loopResult.toolCallsMade) {
+          currentDetail.searches.push({ query: tc.query, sources: tc.sources });
           loopSummary += `🔍 Searched: "${tc.query}"\n`;
           if (tc.sources.length > 0) {
             loopSummary += `📎 Sources: ${tc.sources.slice(0, 3).join(', ')}\n`;
@@ -339,10 +361,12 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
         }
       }
 
+      currentDetail.status = 'done';
       innerThoughts += loopSummary + '\n';
+      onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: 'Done', completedLoops: [...completedLoops] });
     }
 
-    onLoopProgress?.({ currentLoop: researchLoops, totalLoops: researchLoops, activity: 'Preparing response...' });
+    onLoopProgress?.({ currentLoop: researchLoops, totalLoops: researchLoops, activity: 'Preparing response...', completedLoops });
   }
 
   // --- Pass 1: Inner reasoning (chain of thought) ---
