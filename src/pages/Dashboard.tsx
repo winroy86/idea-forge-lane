@@ -32,6 +32,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
       agentIds: [],
       orchestration: 'manual',
       balanceSlider: 50,
+      documents: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

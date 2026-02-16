@@ -1,8 +1,9 @@
-import { Agent, Message, ProviderConfig, SummarizerAction } from '@/types';
+import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction } from '@/types';
 import { getProviders } from '@/lib/store';
 
 interface LLMResponse {
   content: string;
+  innerThoughts?: string;
   tokensUsed?: number;
   latencyMs: number;
   model: string;
@@ -20,17 +21,25 @@ function findProvider(providerType: string, baseUrl?: string): ProviderConfig | 
   return providers.find(p => p.provider === providerType && p.isActive) || null;
 }
 
-function buildSystemMessage(agent: Agent): string {
+function buildSystemMessage(agent: Agent, documents: RoomDocument[] = []): string {
   let prompt = agent.systemPrompt || `You are ${agent.name}, a ${agent.role}.`;
   if (agent.domain) prompt += `\nYour area of expertise is: ${agent.domain}.`;
   if (agent.pointOfView) prompt += `\nYour perspective/point of view: ${agent.pointOfView}.`;
   if (agent.styleVoice) prompt += `\nYour communication style: ${agent.styleVoice}.`;
+  if (documents.length > 0) {
+    prompt += `\n\n--- REFERENCE DOCUMENTS ---\nYou have been provided the following documents to inform your responses:\n`;
+    documents.forEach((doc, i) => {
+      prompt += `\n[Document ${i + 1}: "${doc.name}"]\n${doc.content}\n`;
+    });
+    prompt += `\n--- END DOCUMENTS ---\n`;
+  }
   prompt += `\nKeep your responses concise and focused. You are participating in a multi-agent brainstorming session.`;
   return prompt;
 }
 
-function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[]) {
-  const system = buildSystemMessage(agent);
+function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = []) {
+  const system = buildSystemMessage(agent, documents);
+  // Only include public content - inner thoughts are private and not shared
   const history = messages.map(m => {
     if (m.role === 'user') {
       return { role: 'user' as const, content: m.content };
@@ -43,6 +52,7 @@ function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[]
     if (m.agentId === agent.id) {
       return { role: 'assistant' as const, content: m.content };
     }
+    // Only share the public content, never the innerThoughts
     return { role: 'user' as const, content: `[${name} (${msgAgent?.role || ''})]: ${m.content}` };
   });
   return { system, history };
@@ -221,8 +231,8 @@ export async function callAgent(
   agent: Agent,
   messages: Message[],
   allAgents: Agent[],
+  documents: RoomDocument[] = [],
 ): Promise<LLMResponse> {
-  // Lovable AI doesn't need a provider config entry
   if (agent.config.provider !== 'lovable') {
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
     if (!provider) {
@@ -230,8 +240,65 @@ export async function callAgent(
     }
   }
 
-  const { system, history } = buildChatMessages(agent, messages, allAgents);
+  const { system, history } = buildChatMessages(agent, messages, allAgents, documents);
   const start = performance.now();
+
+  // --- Pass 1: Inner reasoning (chain of thought) ---
+  const thinkingSystem = `${system}
+
+IMPORTANT: You are now in your PRIVATE THINKING mode. The other agents CANNOT see this.
+Analyze the conversation so far and any reference documents.
+Think through:
+1. What are the key points being discussed?
+2. What's your unique perspective given your expertise?
+3. What are the strengths and weaknesses of other agents' arguments?
+4. What insights from the documents (if any) are relevant?
+5. What's your strategy for your response?
+
+Be honest and analytical in your thinking. This is your private space.`;
+
+  const thinkingAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1024) } };
+
+  let innerThoughts = '';
+  let tokensUsed: number | undefined;
+
+  // Only do inner thoughts if there's conversation context or documents
+  if (messages.length > 0 || documents.length > 0) {
+    const thinkResult = await callProviderRaw(thinkingAgent, thinkingSystem, history);
+    innerThoughts = thinkResult.content;
+    tokensUsed = thinkResult.tokensUsed;
+  }
+
+  // --- Pass 2: Public response (what the agent says to the group) ---
+  const responseHistory = innerThoughts
+    ? [
+        ...history,
+        { role: 'assistant' as const, content: `[My private analysis]: ${innerThoughts}` },
+        { role: 'user' as const, content: 'Now provide your PUBLIC response to the group. Be concise and impactful. Do NOT reveal your private thinking process — just share your conclusion and arguments.' },
+      ]
+    : history;
+
+  const publicResult = await callProviderRaw(agent, system, responseHistory);
+  tokensUsed = (tokensUsed || 0) + (publicResult.tokensUsed || 0);
+
+  const latencyMs = Math.round(performance.now() - start);
+
+  return {
+    content: publicResult.content,
+    innerThoughts: innerThoughts || undefined,
+    tokensUsed,
+    latencyMs,
+    model: agent.config.model,
+    provider: agent.config.provider,
+  };
+}
+
+// Raw provider call (single pass)
+async function callProviderRaw(
+  agent: Agent,
+  system: string,
+  history: { role: string; content: string }[],
+): Promise<{ content: string; tokensUsed?: number }> {
   let content = '';
   let tokensUsed: number | undefined;
 
@@ -281,15 +348,7 @@ export async function callAgent(
     }
   }
 
-  const latencyMs = Math.round(performance.now() - start);
-
-  return {
-    content,
-    tokensUsed,
-    latencyMs,
-    model: agent.config.model,
-    provider: agent.config.provider,
-  };
+  return { content, tokensUsed };
 }
 
 // ---- Summarizer (uses first available provider) ----

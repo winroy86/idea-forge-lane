@@ -4,9 +4,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Send, Plus, Play, Pause, SkipForward,
   ListOrdered, RotateCcw, Sparkles, FileText, CheckSquare,
-  ClipboardList, Brain, Settings2, X, ChevronRight
+  ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
+  Upload, Eye, EyeOff, Paperclip, Trash2
 } from 'lucide-react';
-import { Room, Agent, Message, OrchestrationType, SummarizerAction } from '@/types';
+import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId
 } from '@/lib/store';
@@ -30,6 +31,31 @@ function getAgentColor(index: number) {
   return AGENT_COLORS[index % AGENT_COLORS.length];
 }
 
+function InnerThoughtsBlock({ thoughts, agentName }: { thoughts: string; agentName: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mt-2 rounded-md border border-dashed border-muted-foreground/30 bg-muted/30">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Brain className="h-3 w-3 shrink-0" />
+        <span className="font-medium">{agentName}'s inner thoughts</span>
+        <span className="ml-auto text-[9px] italic opacity-60">(only you can see this)</span>
+        {expanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-2.5 pb-2.5 border-t border-dashed border-muted-foreground/20">
+          <div className="mt-2 text-xs text-muted-foreground italic leading-relaxed prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
+            <ReactMarkdown>{thoughts}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RoomView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -41,13 +67,17 @@ export default function RoomView() {
   const [loadingAgentId, setLoadingAgentId] = useState<string | null>(null);
   const [showAgentPanel, setShowAgentPanel] = useState(false);
   const [suggestedSpeaker, setSuggestedSpeaker] = useState<string | null>(null);
+  const [showDocPanel, setShowDocPanel] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
   useEffect(() => {
     if (!id) return;
     const r = getRoom(id);
     if (!r) { navigate('/'); return; }
+    // Migrate old rooms without documents
+    if (!r.documents) r.documents = [];
     setRoom(r);
     setAllAgents(getAgents());
     setMessages(getMessages(id));
@@ -74,6 +104,53 @@ export default function RoomView() {
     setRoom(updated);
   };
 
+  // --- Document handling ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !room) return;
+
+    for (const file of Array.from(files)) {
+      if (file.size > 5 * 1024 * 1024) {
+        toast({ title: 'File too large', description: `${file.name} exceeds 5MB limit`, variant: 'destructive' });
+        continue;
+      }
+
+      try {
+        const content = await file.text();
+        const doc: RoomDocument = {
+          id: generateId(),
+          name: file.name,
+          content: content.slice(0, 50000), // limit to ~50k chars
+          addedAt: new Date().toISOString(),
+        };
+        const updated = {
+          ...room,
+          documents: [...(room.documents || []), doc],
+          updatedAt: new Date().toISOString(),
+        };
+        upsertRoom(updated);
+        setRoom(updated);
+        toast({ title: `📄 ${file.name} loaded`, description: `${content.length.toLocaleString()} characters` });
+      } catch {
+        toast({ title: 'Failed to read file', description: file.name, variant: 'destructive' });
+      }
+    }
+
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeDocument = (docId: string) => {
+    if (!room) return;
+    const updated = {
+      ...room,
+      documents: (room.documents || []).filter(d => d.id !== docId),
+      updatedAt: new Date().toISOString(),
+    };
+    upsertRoom(updated);
+    setRoom(updated);
+  };
+
   const sendUserMessage = () => {
     if (!input.trim() || !room) return;
     const msg: Message = {
@@ -88,7 +165,6 @@ export default function RoomView() {
     setMessages(prev => [...prev, msg]);
     setInput('');
 
-    // Suggest next speaker
     if (roomAgents.length > 0) {
       const suggested = roomAgents[Math.floor(Math.random() * roomAgents.length)];
       setSuggestedSpeaker(suggested.id);
@@ -101,13 +177,14 @@ export default function RoomView() {
 
     setLoadingAgentId(agentId);
     try {
-      const result = await callAgent(agent, messages, allAgents);
+      const result = await callAgent(agent, messages, allAgents, room.documents || []);
       const msg: Message = {
         id: generateId(),
         roomId: room.id,
         agentId: agent.id,
         role: 'agent',
         content: result.content,
+        innerThoughts: result.innerThoughts,
         timestamp: new Date().toISOString(),
         metadata: {
           model: result.model,
@@ -119,7 +196,6 @@ export default function RoomView() {
       addMessage(msg);
       setMessages(prev => [...prev, msg]);
 
-      // Suggest next
       const others = roomAgents.filter(a => a.id !== agentId);
       if (others.length > 0) {
         setSuggestedSpeaker(others[Math.floor(Math.random() * others.length)].id);
@@ -167,6 +243,8 @@ export default function RoomView() {
 
   if (!room) return null;
 
+  const documents = room.documents || [];
+
   return (
     <div className="flex h-full animate-fade-in">
       {/* Main chat area */}
@@ -181,6 +259,16 @@ export default function RoomView() {
             {room.goal && <p className="text-xs text-muted-foreground truncate">{room.goal}</p>}
           </div>
           <div className="flex items-center gap-2">
+            {/* Document indicator */}
+            {documents.length > 0 && (
+              <button
+                onClick={() => setShowDocPanel(!showDocPanel)}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted border border-border"
+              >
+                <FileText className="h-3 w-3" />
+                <span>{documents.length} doc{documents.length > 1 ? 's' : ''}</span>
+              </button>
+            )}
             <Select value={room.orchestration} onValueChange={(v) => updateOrchestration(v as OrchestrationType)}>
               <SelectTrigger className="w-28 h-8 text-xs">
                 <SelectValue />
@@ -201,12 +289,39 @@ export default function RoomView() {
           </div>
         </div>
 
+        {/* Document panel (collapsible) */}
+        {showDocPanel && (
+          <div className="border-b border-border bg-muted/30 px-4 py-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-foreground">📄 Loaded Documents</p>
+              <button onClick={() => setShowDocPanel(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {documents.map(doc => (
+              <div key={doc.id} className="flex items-center gap-2 rounded border border-border bg-card px-2.5 py-1.5">
+                <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="text-xs text-foreground truncate flex-1">{doc.name}</span>
+                <span className="text-[10px] text-muted-foreground">{doc.content.length.toLocaleString()} chars</span>
+                <button onClick={() => removeDocument(doc.id)} className="text-muted-foreground hover:text-destructive">
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center py-16">
               <Sparkles className="h-8 w-8 text-accent/50 mb-3" />
               <p className="text-sm text-muted-foreground">Add agents and start the conversation.</p>
+              {documents.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  📄 {documents.length} document{documents.length > 1 ? 's' : ''} loaded — agents will analyze {documents.length > 1 ? 'them' : 'it'} when responding.
+                </p>
+              )}
             </div>
           )}
           {messages.map((msg) => {
@@ -242,6 +357,10 @@ export default function RoomView() {
                   <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
+                  {/* Inner thoughts - only visible to the user, styled differently */}
+                  {msg.innerThoughts && agent && (
+                    <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} />
+                  )}
                   {msg.metadata && (
                     <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
                       <span>{msg.metadata.model}</span>
@@ -289,6 +408,24 @@ export default function RoomView() {
         {/* Input */}
         <div className="border-t border-border p-3 bg-card">
           <div className="flex gap-2">
+            {/* Document upload button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java,.go,.rs,.c,.cpp,.h,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql"
+              multiple
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload documents for agents to analyze"
+              className="shrink-0"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -362,6 +499,37 @@ export default function RoomView() {
               <Button variant="outline" size="sm" onClick={() => navigate('/agents')}>
                 Create Agents
               </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Documents section */}
+        <div className="border-t border-border p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Documents</p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          </div>
+          {documents.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
+          ) : (
+            <div className="space-y-1">
+              {documents.map(doc => (
+                <div key={doc.id} className="flex items-center gap-1.5 text-[10px] group">
+                  <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <span className="text-foreground truncate flex-1">{doc.name}</span>
+                  <button
+                    onClick={() => removeDocument(doc.id)}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
