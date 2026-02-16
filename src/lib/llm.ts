@@ -166,6 +166,55 @@ async function callGemini(
   };
 }
 
+// ---- Lovable AI (via edge function) ----
+
+async function callLovableAI(
+  model: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+): Promise<{ content: string; usage?: { total_tokens?: number } }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
+
+  const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({
+      model: model || 'google/gemini-3-flash-preview',
+      messages: [
+        { role: 'system', content: system },
+        ...history,
+      ],
+      temperature: agent.config.temperature,
+      max_tokens: agent.config.maxTokens,
+      top_p: agent.config.topP,
+      presence_penalty: agent.config.presencePenalty,
+      frequency_penalty: agent.config.frequencyPenalty,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    try {
+      const parsed = JSON.parse(err);
+      throw new Error(parsed.error || `Lovable AI error (${res.status})`);
+    } catch (e) {
+      if (e instanceof Error && e.message !== `Unexpected token`) throw e;
+      throw new Error(`Lovable AI error (${res.status}): ${err}`);
+    }
+  }
+
+  const data = await res.json();
+  return {
+    content: data.choices?.[0]?.message?.content || 'No response',
+    usage: data.usage,
+  };
+}
+
 // ---- Main entry point ----
 
 export async function callAgent(
@@ -173,9 +222,12 @@ export async function callAgent(
   messages: Message[],
   allAgents: Agent[],
 ): Promise<LLMResponse> {
-  const provider = findProvider(agent.config.provider, agent.config.baseUrl);
-  if (!provider) {
-    throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
+  // Lovable AI doesn't need a provider config entry
+  if (agent.config.provider !== 'lovable') {
+    const provider = findProvider(agent.config.provider, agent.config.baseUrl);
+    if (!provider) {
+      throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
+    }
   }
 
   const { system, history } = buildChatMessages(agent, messages, allAgents);
@@ -184,7 +236,14 @@ export async function callAgent(
   let tokensUsed: number | undefined;
 
   switch (agent.config.provider) {
+    case 'lovable': {
+      const result = await callLovableAI(agent.config.model, system, history, agent);
+      content = result.content;
+      tokensUsed = result.usage?.total_tokens;
+      break;
+    }
     case 'anthropic': {
+      const provider = findProvider('anthropic')!;
       const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
       content = result.content;
       tokensUsed = result.usage
@@ -193,6 +252,7 @@ export async function callAgent(
       break;
     }
     case 'gemini': {
+      const provider = findProvider('gemini')!;
       const result = await callGemini(provider.apiKey, agent.config.model, system, history, agent);
       content = result.content;
       break;
@@ -202,6 +262,7 @@ export async function callAgent(
     case 'ollama':
     case 'custom':
     default: {
+      const provider = findProvider(agent.config.provider, agent.config.baseUrl)!;
       const baseUrl =
         agent.config.provider === 'ollama'
           ? (provider.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
@@ -238,8 +299,11 @@ export async function callSummarizer(
   messages: Message[],
   allAgents: Agent[],
 ): Promise<LLMResponse> {
+  // Prefer Lovable AI for summarizer (no API key needed)
+  const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
   const providers = getProviders().filter(p => p.isActive);
-  if (providers.length === 0) {
+
+  if (!hasLovableCloud && providers.length === 0) {
     throw new Error('No active providers configured. Go to Providers to add an API key.');
   }
 
@@ -257,53 +321,74 @@ export async function callSummarizer(
     return { role: 'user' as const, content: `${prefix}: ${m.content}` };
   });
 
-  // Use first available provider
-  const provider = providers[0];
   const start = performance.now();
   let content = '';
+  let usedModel = '';
+  let usedProvider = '';
 
-  // Build a temporary agent config for the call
-  const tempAgent = {
-    config: {
-      provider: provider.provider,
-      model: provider.provider === 'anthropic' ? 'claude-sonnet-4-20250514' :
-             provider.provider === 'gemini' ? 'gemini-2.0-flash' :
-             provider.provider === 'openai' ? 'gpt-4o-mini' : 'gpt-4o-mini',
-      temperature: 0.3,
-      topP: 1,
-      maxTokens: 2048,
-      presencePenalty: 0,
-      frequencyPenalty: 0,
-    },
-  } as Agent;
+  // Try Lovable AI first
+  if (hasLovableCloud) {
+    const tempAgent = {
+      config: {
+        provider: 'lovable' as const,
+        model: 'google/gemini-3-flash-preview',
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+    const result = await callLovableAI('google/gemini-3-flash-preview', system, history, tempAgent);
+    content = result.content;
+    usedModel = 'google/gemini-3-flash-preview';
+    usedProvider = 'lovable';
+  } else {
+    const provider = providers[0];
+    const tempAgent = {
+      config: {
+        provider: provider.provider,
+        model: provider.provider === 'anthropic' ? 'claude-sonnet-4-20250514' :
+               provider.provider === 'gemini' ? 'gemini-2.0-flash' :
+               provider.provider === 'openai' ? 'gpt-4o-mini' : 'gpt-4o-mini',
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
 
-  switch (provider.provider) {
-    case 'anthropic': {
-      const result = await callAnthropic(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-      content = result.content;
-      break;
+    switch (provider.provider) {
+      case 'anthropic': {
+        const result = await callAnthropic(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
+        content = result.content;
+        break;
+      }
+      case 'gemini': {
+        const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
+        content = result.content;
+        break;
+      }
+      default: {
+        const baseUrl = provider.provider === 'ollama'
+          ? (provider.baseUrl || 'http://localhost:11434/v1')
+          : provider.provider === 'custom'
+          ? (provider.baseUrl || '')
+          : 'https://api.openai.com/v1';
+        const result = await callOpenAICompatible(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
+        content = result.content;
+        break;
+      }
     }
-    case 'gemini': {
-      const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-      content = result.content;
-      break;
-    }
-    default: {
-      const baseUrl = provider.provider === 'ollama'
-        ? (provider.baseUrl || 'http://localhost:11434/v1')
-        : provider.provider === 'custom'
-        ? (provider.baseUrl || '')
-        : 'https://api.openai.com/v1';
-      const result = await callOpenAICompatible(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
-      content = result.content;
-      break;
-    }
+    usedModel = tempAgent.config.model;
+    usedProvider = provider.provider;
   }
 
   return {
     content,
     latencyMs: Math.round(performance.now() - start),
-    model: tempAgent.config.model,
-    provider: provider.provider,
+    model: usedModel,
+    provider: usedProvider,
   };
 }

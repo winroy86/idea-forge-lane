@@ -25,8 +25,8 @@ import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 
 const DEFAULT_CONFIG: AgentConfig = {
-  provider: 'openai',
-  model: 'gpt-4',
+  provider: 'lovable',
+  model: 'google/gemini-3-flash-preview',
   temperature: 0.7,
   topP: 1,
   maxTokens: 2048,
@@ -34,7 +34,18 @@ const DEFAULT_CONFIG: AgentConfig = {
   frequencyPenalty: 0,
 };
 
+const LOVABLE_MODELS = [
+  { value: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash (Fast)' },
+  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro (Powerful)' },
+  { value: 'google/gemini-3-pro-preview', label: 'Gemini 3 Pro' },
+  { value: 'openai/gpt-5-nano', label: 'GPT-5 Nano (Fast)' },
+  { value: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
+  { value: 'openai/gpt-5', label: 'GPT-5 (Powerful)' },
+];
+
 const PROVIDERS: { value: LLMProvider; label: string }[] = [
+  { value: 'lovable', label: '⚡ Lovable AI' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'gemini', label: 'Google Gemini' },
@@ -140,7 +151,18 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
             </div>
             <div>
               <Label>Model</Label>
-              {form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
+              {form.config.provider === 'lovable' ? (
+                <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOVABLE_MODELS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
                 <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select a model" />
