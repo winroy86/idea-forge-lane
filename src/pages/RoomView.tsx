@@ -613,7 +613,7 @@ export default function RoomView() {
               variant="outline"
               size="icon"
               onClick={() => fileInputRef.current?.click()}
-              title="Upload documents for agents to analyze"
+              title="Upload documents: PDF, Word, PowerPoint, Excel, images, text files, code files"
               className="shrink-0"
             >
               <Paperclip className="h-4 w-4" />
@@ -707,7 +707,10 @@ export default function RoomView() {
             </button>
           </div>
           {documents.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
+            <div>
+              <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
+              <p className="text-[9px] text-muted-foreground/60 mt-1">Supports: PDF, Word, PowerPoint, Excel, images, text & code files</p>
+            </div>
           ) : (
             <div className="space-y-1">
               {documents.map(doc => (
