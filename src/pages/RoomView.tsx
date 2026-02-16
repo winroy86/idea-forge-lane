@@ -68,6 +68,10 @@ export default function RoomView() {
   const [showAgentPanel, setShowAgentPanel] = useState(false);
   const [suggestedSpeaker, setSuggestedSpeaker] = useState<string | null>(null);
   const [showDocPanel, setShowDocPanel] = useState(false);
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoRoundCount, setAutoRoundCount] = useState(0);
+  const [maxAutoRounds, setMaxAutoRounds] = useState(3);
+  const autoRunningRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -239,6 +243,107 @@ export default function RoomView() {
     const updated = { ...room, orchestration: type, updatedAt: new Date().toISOString() };
     upsertRoom(updated);
     setRoom(updated);
+    // Stop auto-run if switching away from auto modes
+    if (type === 'manual') {
+      stopAutoRun();
+    }
+  };
+
+  const stopAutoRun = () => {
+    autoRunningRef.current = false;
+    setAutoRunning(false);
+    setAutoRoundCount(0);
+  };
+
+  const getNextSpeaker = (
+    currentMessages: Message[],
+    agents: Agent[],
+    orchestration: OrchestrationType,
+    sequenceOrder?: string[],
+  ): Agent | null => {
+    if (agents.length === 0) return null;
+
+    if (orchestration === 'sequence') {
+      const order = sequenceOrder?.length ? sequenceOrder : agents.map(a => a.id);
+      const lastAgentMsg = [...currentMessages].reverse().find(m => m.role === 'agent');
+      if (!lastAgentMsg) return agents.find(a => a.id === order[0]) || agents[0];
+      const lastIdx = order.indexOf(lastAgentMsg.agentId || '');
+      const nextIdx = (lastIdx + 1) % order.length;
+      return agents.find(a => a.id === order[nextIdx]) || agents[0];
+    }
+
+    // Auto / Loop: pick the agent who spoke least recently, weighted by balance
+    const speakCounts = new Map<string, number>();
+    agents.forEach(a => speakCounts.set(a.id, 0));
+    currentMessages.filter(m => m.role === 'agent').forEach(m => {
+      if (m.agentId) speakCounts.set(m.agentId, (speakCounts.get(m.agentId) || 0) + 1);
+    });
+
+    const lastAgentMsg = [...currentMessages].reverse().find(m => m.role === 'agent');
+    const eligible = agents.filter(a => a.id !== lastAgentMsg?.agentId);
+    if (eligible.length === 0) return agents[0];
+
+    // Sort by least spoken
+    eligible.sort((a, b) => (speakCounts.get(a.id) || 0) - (speakCounts.get(b.id) || 0));
+    return eligible[0];
+  };
+
+  const startAutoRun = async () => {
+    if (!room || roomAgents.length < 2) {
+      toast({ title: 'Need at least 2 agents', description: 'Add more agents to use auto mode.', variant: 'destructive' });
+      return;
+    }
+
+    autoRunningRef.current = true;
+    setAutoRunning(true);
+    setAutoRoundCount(0);
+
+    let currentMessages = [...messages];
+    const totalTurns = maxAutoRounds * roomAgents.length;
+
+    for (let turn = 0; turn < totalTurns; turn++) {
+      if (!autoRunningRef.current) break;
+
+      const nextAgent = getNextSpeaker(currentMessages, roomAgents, room.orchestration, room.sequenceOrder);
+      if (!nextAgent) break;
+
+      setLoadingAgentId(nextAgent.id);
+      try {
+        const result = await callAgent(nextAgent, currentMessages, allAgents, room.documents || []);
+        if (!autoRunningRef.current) break;
+
+        const msg: Message = {
+          id: generateId(),
+          roomId: room.id,
+          agentId: nextAgent.id,
+          role: 'agent',
+          content: result.content,
+          innerThoughts: result.innerThoughts,
+          timestamp: new Date().toISOString(),
+          metadata: {
+            model: result.model,
+            provider: result.provider,
+            tokensUsed: result.tokensUsed,
+            latencyMs: result.latencyMs,
+          },
+        };
+        addMessage(msg);
+        currentMessages = [...currentMessages, msg];
+        setMessages([...currentMessages]);
+
+        // Update round count
+        const completedRound = Math.floor((turn + 1) / roomAgents.length);
+        setAutoRoundCount(completedRound);
+      } catch (err: any) {
+        toast({ title: `${nextAgent.name} error`, description: err.message, variant: 'destructive' });
+        break;
+      } finally {
+        setLoadingAgentId(null);
+      }
+    }
+
+    autoRunningRef.current = false;
+    setAutoRunning(false);
   };
 
   if (!room) return null;
@@ -375,8 +480,43 @@ export default function RoomView() {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Suggested speaker */}
-        {suggestedSpeaker && roomAgents.length > 0 && (
+        {/* Auto-orchestration controls */}
+        {room.orchestration !== 'manual' && (
+          <div className="border-t border-border bg-accent/5 px-4 py-2 flex items-center gap-3">
+            {autoRunning ? (
+              <>
+                <Button variant="destructive" size="sm" className="gap-1.5 text-xs" onClick={stopAutoRun}>
+                  <Pause className="h-3 w-3" /> Stop
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Round {autoRoundCount}/{maxAutoRounds} • {loadingAgentId ? `${allAgents.find(a => a.id === loadingAgentId)?.name} thinking…` : 'waiting…'}
+                </span>
+              </>
+            ) : (
+              <>
+                <Button variant="default" size="sm" className="gap-1.5 text-xs" onClick={startAutoRun} disabled={!!loadingAgentId || roomAgents.length < 2}>
+                  <Play className="h-3 w-3" /> Run {room.orchestration === 'sequence' ? 'Sequence' : room.orchestration === 'loop' ? 'Loop' : 'Auto'}
+                </Button>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-muted-foreground">Rounds:</span>
+                  <Select value={String(maxAutoRounds)} onValueChange={(v) => setMaxAutoRounds(Number(v))}>
+                    <SelectTrigger className="w-14 h-7 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1,2,3,5,10].map(n => (
+                        <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Suggested speaker (manual mode only) */}
+        {room.orchestration === 'manual' && suggestedSpeaker && roomAgents.length > 0 && (
           <div className="border-t border-border bg-accent/5 px-4 py-2 flex items-center gap-2">
             <Sparkles className="h-3.5 w-3.5 text-accent" />
             <span className="text-xs text-muted-foreground">Suggested:</span>
