@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
@@ -13,6 +13,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import {
   Select,
@@ -23,6 +24,14 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
+
+const FAMOUS_SUGGESTIONS = [
+  'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
+  'Marie Curie', 'Socrates', 'Sun Tzu', 'Warren Buffett',
+  'Leonardo da Vinci', 'Cleopatra', 'Marcus Aurelius', 'Ada Lovelace',
+  'Richard Feynman', 'Oprah Winfrey', 'Machiavelli', 'Carl Sagan',
+];
 
 const DEFAULT_CONFIG: AgentConfig = {
   provider: 'lovable',
@@ -247,9 +256,186 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   );
 }
 
+function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent) => void; onClose: () => void }) {
+  const [mode, setMode] = useState<'famous' | 'custom'>('famous');
+  const [personName, setPersonName] = useState('');
+  const [description, setDescription] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [searchFilter, setSearchFilter] = useState('');
+  const { toast } = useToast();
+
+  const filteredSuggestions = FAMOUS_SUGGESTIONS.filter(name =>
+    name.toLowerCase().includes(searchFilter.toLowerCase())
+  );
+
+  const generate = async () => {
+    if (mode === 'famous' && !personName.trim()) return;
+    if (mode === 'custom' && !description.trim()) return;
+
+    setIsGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-persona', {
+        body: mode === 'famous'
+          ? { personName: personName.trim(), description: description.trim() }
+          : { description: description.trim() },
+      });
+
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
+
+      const persona = data.persona;
+      const agent: Agent = {
+        id: generateId(),
+        name: persona.name,
+        role: persona.role,
+        domain: persona.domain,
+        pointOfView: persona.pointOfView,
+        systemPrompt: persona.systemPrompt,
+        styleVoice: persona.styleVoice,
+        config: { ...DEFAULT_CONFIG },
+        colorIndex: Math.floor(Math.random() * 6),
+        memoryEnabled: true,
+        skills: [],
+        permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      onGenerated(agent);
+      toast({ title: `✨ ${persona.name} persona created!` });
+    } catch (err: any) {
+      toast({ title: 'Generation failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <Sparkles className="h-5 w-5 text-accent" />
+          Auto Persona Generator
+        </DialogTitle>
+        <DialogDescription>
+          Clone a famous person or generate a custom persona using AI deep research.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="space-y-4 pt-2">
+        {/* Mode tabs */}
+        <div className="flex rounded-lg border border-border overflow-hidden">
+          <button
+            onClick={() => setMode('famous')}
+            className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+              mode === 'famous' ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <User className="h-4 w-4" /> Clone Famous Person
+          </button>
+          <button
+            onClick={() => setMode('custom')}
+            className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+              mode === 'custom' ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Sparkles className="h-4 w-4" /> Custom Persona
+          </button>
+        </div>
+
+        {mode === 'famous' ? (
+          <>
+            <div>
+              <Label>Person Name</Label>
+              <Input
+                value={personName}
+                onChange={e => setPersonName(e.target.value)}
+                placeholder="e.g. Elon Musk, Socrates, Marie Curie..."
+              />
+            </div>
+
+            {/* Quick suggestions */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Label className="text-xs text-muted-foreground">Quick picks</Label>
+                <Input
+                  value={searchFilter}
+                  onChange={e => setSearchFilter(e.target.value)}
+                  placeholder="Filter..."
+                  className="h-6 text-xs w-32"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {filteredSuggestions.map(name => (
+                  <button
+                    key={name}
+                    onClick={() => setPersonName(name)}
+                    className={`rounded-full px-2.5 py-1 text-xs border transition-colors ${
+                      personName === name
+                        ? 'bg-accent text-accent-foreground border-accent'
+                        : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                    }`}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label>Focus area <span className="text-muted-foreground">(optional)</span></Label>
+              <Input
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="e.g. their views on AI, their leadership style..."
+              />
+            </div>
+          </>
+        ) : (
+          <div>
+            <Label>Describe your persona</Label>
+            <Textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              rows={4}
+              placeholder="e.g. A cynical venture capitalist who's seen every pitch fail, speaks in startup jargon but is secretly a poet..."
+            />
+          </div>
+        )}
+
+        {/* Generate animation */}
+        {isGenerating && (
+          <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent/5 p-3">
+            <Loader2 className="h-5 w-5 animate-spin text-accent" />
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {mode === 'famous' ? `Researching ${personName}...` : 'Generating persona...'}
+              </p>
+              <p className="text-xs text-muted-foreground">AI is analyzing communication style, beliefs, and expertise</p>
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          <Button
+            onClick={generate}
+            className="flex-1 gap-1.5"
+            disabled={isGenerating || (mode === 'famous' ? !personName.trim() : !description.trim())}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            {isGenerating ? 'Generating...' : 'Generate Persona'}
+          </Button>
+        </div>
+      </div>
+    </DialogContent>
+  );
+}
+
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [editAgent, setEditAgent] = useState<Agent | null | undefined>(undefined); // undefined = closed
+  const [editAgent, setEditAgent] = useState<Agent | null | undefined>(undefined);
+  const [showGenerator, setShowGenerator] = useState(false);
   const { toast } = useToast();
 
   const refresh = () => setAgents(getAgents());
@@ -314,6 +500,9 @@ export default function AgentsPage() {
           <Button variant="outline" size="sm" onClick={handleExport} className="gap-1.5" disabled={agents.length === 0}>
             <Download className="h-3.5 w-3.5" /> Export
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowGenerator(true)} className="gap-1.5 border-accent/40 text-accent hover:bg-accent/10">
+            <Sparkles className="h-3.5 w-3.5" /> Auto Generate
+          </Button>
           <Button size="sm" onClick={() => setEditAgent(null)} className="gap-1.5">
             <Plus className="h-3.5 w-3.5" /> New Agent
           </Button>
@@ -367,6 +556,19 @@ export default function AgentsPage() {
       <Dialog open={editAgent !== undefined} onOpenChange={(open) => !open && setEditAgent(undefined)}>
         {editAgent !== undefined && (
           <AgentEditor agent={editAgent} onSave={handleSave} onClose={() => setEditAgent(undefined)} />
+        )}
+      </Dialog>
+
+      <Dialog open={showGenerator} onOpenChange={setShowGenerator}>
+        {showGenerator && (
+          <PersonaGenerator
+            onGenerated={(agent) => {
+              upsertAgent(agent);
+              setShowGenerator(false);
+              refresh();
+            }}
+            onClose={() => setShowGenerator(false)}
+          />
         )}
       </Dialog>
     </div>
