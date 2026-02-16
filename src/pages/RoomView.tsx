@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Send, Plus, Play, Pause, SkipForward,
@@ -238,7 +239,9 @@ export default function RoomView() {
                       <span className="font-medium text-xs">Summarizer</span>
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
                   {msg.metadata && (
                     <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
                       <span>{msg.metadata.model}</span>
