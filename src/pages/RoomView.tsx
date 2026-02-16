@@ -9,6 +9,8 @@ import { Room, Agent, Message, OrchestrationType, SummarizerAction } from '@/typ
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId
 } from '@/lib/store';
+import { callAgent, callSummarizer } from '@/lib/llm';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -27,30 +29,6 @@ function getAgentColor(index: number) {
   return AGENT_COLORS[index % AGENT_COLORS.length];
 }
 
-function mockAgentResponse(agent: Agent, messages: Message[]): string {
-  const responses = [
-    `From my perspective as a ${agent.role}, I think we should consider the broader implications here. The key challenge is aligning stakeholder expectations with technical feasibility.`,
-    `Building on what was said, I'd like to add that ${agent.domain} expertise suggests a phased approach. We should start with the most impactful change and iterate from there.`,
-    `I see this differently. Given my ${agent.pointOfView} viewpoint, the priority should be user experience first. Everything else follows from getting that right.`,
-    `Great points raised. Let me synthesize: we have consensus on the direction but need to resolve the timeline. I propose we set milestones for the next 3 sprints.`,
-    `I want to challenge the assumption here. In ${agent.domain}, we've seen that the conventional approach often fails at scale. Have we considered alternatives?`,
-  ];
-  return responses[Math.floor(Math.random() * responses.length)];
-}
-
-function mockSummary(action: SummarizerAction, messages: Message[], agents: Agent[]): string {
-  switch (action) {
-    case 'summarize':
-      return `## Summary\n\n**${messages.length} messages** exchanged between ${agents.length} agents.\n\n### Key Points\n- Multiple perspectives were shared on the core challenge\n- There's emerging consensus on a phased approach\n- Timeline and resource allocation remain open questions\n\n### Themes\n1. User experience was highlighted as a priority\n2. Technical feasibility needs validation\n3. Stakeholder alignment is critical for success`;
-    case 'decisions':
-      return `## Decisions & Open Questions\n\n### ✅ Decisions Made\n- Adopt a phased rollout strategy\n- Prioritize user experience in design decisions\n- Weekly sync cadence for the project\n\n### ❓ Open Questions\n- What's the budget allocation for Phase 1?\n- Who owns the technical validation workstream?\n- How do we measure success for the first milestone?`;
-    case 'actionPlan':
-      return `## Action Plan\n\n### Phase 1 (Week 1-2)\n- [ ] Define success metrics and KPIs\n- [ ] Complete technical feasibility assessment\n- [ ] Draft initial user research plan\n\n### Phase 2 (Week 3-4)\n- [ ] Build prototype based on findings\n- [ ] Conduct user testing sessions\n- [ ] Iterate on design based on feedback\n\n### Phase 3 (Week 5-6)\n- [ ] Finalize implementation plan\n- [ ] Present to stakeholders for approval\n- [ ] Begin development sprint`;
-    case 'updateMemory':
-      return `## Memory Update\n\nAgent memories have been updated with key learnings from this conversation:\n\n${agents.map(a => `- **${a.name}**: Updated with ${Math.floor(Math.random() * 5) + 1} new insights`).join('\n')}`;
-  }
-}
-
 export default function RoomView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -59,9 +37,11 @@ export default function RoomView() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [loadingAgentId, setLoadingAgentId] = useState<string | null>(null);
   const [showAgentPanel, setShowAgentPanel] = useState(false);
   const [suggestedSpeaker, setSuggestedSpeaker] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (!id) return;
@@ -114,46 +94,67 @@ export default function RoomView() {
     }
   };
 
-  const triggerAgent = (agentId: string) => {
+  const triggerAgent = async (agentId: string) => {
     const agent = allAgents.find(a => a.id === agentId);
-    if (!agent || !room) return;
+    if (!agent || !room || loadingAgentId) return;
 
-    const msg: Message = {
-      id: generateId(),
-      roomId: room.id,
-      agentId: agent.id,
-      role: 'agent',
-      content: mockAgentResponse(agent, messages),
-      timestamp: new Date().toISOString(),
-      metadata: {
-        model: agent.config.model,
-        provider: agent.config.provider,
-        tokensUsed: Math.floor(Math.random() * 500) + 100,
-        latencyMs: Math.floor(Math.random() * 2000) + 500,
-      },
-    };
-    addMessage(msg);
-    setMessages(prev => [...prev, msg]);
+    setLoadingAgentId(agentId);
+    try {
+      const result = await callAgent(agent, messages, allAgents);
+      const msg: Message = {
+        id: generateId(),
+        roomId: room.id,
+        agentId: agent.id,
+        role: 'agent',
+        content: result.content,
+        timestamp: new Date().toISOString(),
+        metadata: {
+          model: result.model,
+          provider: result.provider,
+          tokensUsed: result.tokensUsed,
+          latencyMs: result.latencyMs,
+        },
+      };
+      addMessage(msg);
+      setMessages(prev => [...prev, msg]);
 
-    // Suggest next
-    const others = roomAgents.filter(a => a.id !== agentId);
-    if (others.length > 0) {
-      setSuggestedSpeaker(others[Math.floor(Math.random() * others.length)].id);
+      // Suggest next
+      const others = roomAgents.filter(a => a.id !== agentId);
+      if (others.length > 0) {
+        setSuggestedSpeaker(others[Math.floor(Math.random() * others.length)].id);
+      }
+    } catch (err: any) {
+      toast({ title: 'Agent error', description: err.message, variant: 'destructive' });
+    } finally {
+      setLoadingAgentId(null);
     }
   };
 
-  const runSummarizer = (action: SummarizerAction) => {
-    if (!room) return;
-    const msg: Message = {
-      id: generateId(),
-      roomId: room.id,
-      agentId: null,
-      role: 'summarizer',
-      content: mockSummary(action, messages, roomAgents),
-      timestamp: new Date().toISOString(),
-    };
-    addMessage(msg);
-    setMessages(prev => [...prev, msg]);
+  const runSummarizer = async (action: SummarizerAction) => {
+    if (!room || loadingAgentId) return;
+    setLoadingAgentId('summarizer');
+    try {
+      const result = await callSummarizer(action, messages, allAgents);
+      const msg: Message = {
+        id: generateId(),
+        roomId: room.id,
+        agentId: null,
+        role: 'summarizer',
+        content: result.content,
+        timestamp: new Date().toISOString(),
+        metadata: {
+          model: result.model,
+          provider: result.provider,
+          latencyMs: result.latencyMs,
+        },
+      };
+      addMessage(msg);
+      setMessages(prev => [...prev, msg]);
+    } catch (err: any) {
+      toast({ title: 'Summarizer error', description: err.message, variant: 'destructive' });
+    } finally {
+      setLoadingAgentId(null);
+    }
   };
 
   const updateOrchestration = (type: OrchestrationType) => {
@@ -268,16 +269,16 @@ export default function RoomView() {
 
         {/* Summarizer actions */}
         <div className="border-t border-border bg-card px-4 py-2 flex gap-2 overflow-x-auto">
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('summarize')}>
-            <FileText className="h-3 w-3" /> Summarize
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('summarize')} disabled={!!loadingAgentId || messages.length === 0}>
+            <FileText className="h-3 w-3" /> {loadingAgentId === 'summarizer' ? 'Working…' : 'Summarize'}
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('decisions')}>
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('decisions')} disabled={!!loadingAgentId || messages.length === 0}>
             <CheckSquare className="h-3 w-3" /> Decisions
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('actionPlan')}>
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('actionPlan')} disabled={!!loadingAgentId || messages.length === 0}>
             <ClipboardList className="h-3 w-3" /> Action Plan
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('updateMemory')}>
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('updateMemory')} disabled={!!loadingAgentId || messages.length === 0}>
             <Brain className="h-3 w-3" /> Update Memory
           </Button>
         </div>
@@ -328,9 +329,10 @@ export default function RoomView() {
               </div>
               <button
                 onClick={() => triggerAgent(agent.id)}
-                className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors"
+                disabled={!!loadingAgentId}
+                className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors disabled:opacity-50"
               >
-                Speak now
+                {loadingAgentId === agent.id ? 'Thinking…' : 'Speak now'}
               </button>
             </div>
           ))}
