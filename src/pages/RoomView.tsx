@@ -14,6 +14,7 @@ import {
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
+import ResearchProgressBar from '@/components/ResearchProgressBar';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -541,6 +542,11 @@ export default function RoomView() {
               </div>
             );
           })}
+          {/* Research Loop Progress Bar */}
+          {loopProgress && loadingAgentId && (() => {
+            const agent = allAgents.find(a => a.id === loadingAgentId);
+            return agent ? <ResearchProgressBar progress={loopProgress} agentName={agent.name} /> : null;
+          })()}
           <div ref={chatEndRef} />
         </div>
 
