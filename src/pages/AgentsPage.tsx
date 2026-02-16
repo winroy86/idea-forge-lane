@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User } from 'lucide-react';
-import { Agent, AgentConfig, LLMProvider } from '@/types';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X } from 'lucide-react';
+import { Agent, AgentConfig, LLMProvider, McpServerConfig } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
@@ -79,6 +79,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
       researchLoops: 0,
       memoryScopeDefault: 'both',
       skills: [],
+      mcpServers: [],
       permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -87,6 +88,8 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
   const [ollamaLoading, setOllamaLoading] = useState(false);
+  const [mcpUrl, setMcpUrl] = useState('');
+  const [mcpDiscovering, setMcpDiscovering] = useState(false);
 
   useEffect(() => {
     if (form.config.provider === 'ollama') {
@@ -268,6 +271,103 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                 </div>
               </>
             )}
+
+            {/* MCP Servers */}
+            <div className="border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Server className="h-3 w-3" /> MCP Servers
+              </p>
+              <p className="text-[10px] text-muted-foreground mb-2">Connect external tool servers via Model Context Protocol</p>
+              
+              {(form.mcpServers || []).map((mcp) => (
+                <div key={mcp.id} className="flex items-center gap-2 mb-2 rounded border border-border p-2 bg-muted/30">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{mcp.name || mcp.url}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{mcp.url}</p>
+                    {mcp.tools.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {mcp.tools.map(t => (
+                          <span key={t} className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent">{t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Switch
+                    checked={mcp.enabled}
+                    onCheckedChange={v => {
+                      const servers = (form.mcpServers || []).map(s => s.id === mcp.id ? { ...s, enabled: v } : s);
+                      update({ mcpServers: servers });
+                    }}
+                  />
+                  <button
+                    onClick={() => update({ mcpServers: (form.mcpServers || []).filter(s => s.id !== mcp.id) })}
+                    className="text-muted-foreground hover:text-destructive p-0.5"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+
+              <div className="flex gap-2">
+                <Input
+                  value={mcpUrl}
+                  onChange={e => setMcpUrl(e.target.value)}
+                  placeholder="https://mcp-server.example.com/mcp"
+                  className="h-7 text-xs flex-1"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  disabled={!mcpUrl.trim() || mcpDiscovering}
+                  onClick={async () => {
+                    setMcpDiscovering(true);
+                    try {
+                      // Try to discover tools via MCP list_tools
+                      const toolNames: string[] = [];
+                      let serverName = new URL(mcpUrl).hostname;
+                      try {
+                        const res = await fetch(mcpUrl, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+                          signal: AbortSignal.timeout(8000),
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          if (data.result?.tools) {
+                            for (const t of data.result.tools) {
+                              toolNames.push(t.name);
+                            }
+                          }
+                          if (data.result?.serverInfo?.name) {
+                            serverName = data.result.serverInfo.name;
+                          }
+                        }
+                      } catch {
+                        // Discovery failed, still add the server
+                      }
+                      const newServer: McpServerConfig = {
+                        id: generateId(),
+                        name: serverName,
+                        url: mcpUrl.trim(),
+                        tools: toolNames,
+                        enabled: true,
+                      };
+                      update({ mcpServers: [...(form.mcpServers || []), newServer] });
+                      setMcpUrl('');
+                    } catch {
+                      // Invalid URL
+                    } finally {
+                      setMcpDiscovering(false);
+                    }
+                  }}
+                >
+                  {mcpDiscovering ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                  Add
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -322,6 +422,7 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
         researchLoops: 0,
         memoryScopeDefault: 'both',
         skills: [],
+        mcpServers: [],
         permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

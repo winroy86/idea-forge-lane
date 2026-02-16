@@ -190,9 +190,28 @@ async function callLovableAI(
   history: { role: string; content: string }[],
   agent: Agent,
   toolsEnabled?: string[],
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
 ): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
+
+  const bodyPayload: Record<string, unknown> = {
+    model: model || 'google/gemini-3-flash-preview',
+    messages: [
+      { role: 'system', content: system },
+      ...history,
+    ],
+    temperature: agent.config.temperature,
+    max_tokens: agent.config.maxTokens,
+    top_p: agent.config.topP,
+    presence_penalty: agent.config.presencePenalty,
+    frequency_penalty: agent.config.frequencyPenalty,
+    tools_enabled: toolsEnabled,
+  };
+
+  if (mcpServers && mcpServers.length > 0) {
+    bodyPayload.mcp_servers = mcpServers;
+  }
 
   const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
     method: 'POST',
@@ -200,19 +219,7 @@ async function callLovableAI(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
-    body: JSON.stringify({
-      model: model || 'google/gemini-3-flash-preview',
-      messages: [
-        { role: 'system', content: system },
-        ...history,
-      ],
-      temperature: agent.config.temperature,
-      max_tokens: agent.config.maxTokens,
-      top_p: agent.config.topP,
-      presence_penalty: agent.config.presencePenalty,
-      frequency_penalty: agent.config.frequencyPenalty,
-      tools_enabled: toolsEnabled,
-    }),
+    body: JSON.stringify(bodyPayload),
   });
 
   if (!res.ok) {
@@ -273,6 +280,13 @@ export async function callAgent(
   const toolsEnabled: string[] = [];
   if (agent.permissions?.webSearch) {
     toolsEnabled.push('web_search');
+  }
+  if (agent.permissions?.codeExecution) {
+    toolsEnabled.push('code_execution');
+  }
+  const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
+  if (mcpServers.length > 0) {
+    toolsEnabled.push('mcp_call');
   }
 
   let innerThoughts = '';
@@ -395,8 +409,16 @@ Be honest and analytical in your thinking. This is your private space.`;
   }
 
   // --- Pass 2: Public response ---
-  const responseSystem = toolsEnabled.length > 0
-    ? `${system}\n\nYou have access to the following tools:\n- web_search: Search the internet for current information. Use it when you need facts, data, or recent information you're not sure about.\n\nWhen you use a tool, the results will be provided to you automatically.`
+  const toolDescriptions: string[] = [];
+  if (toolsEnabled.includes('web_search')) toolDescriptions.push('- web_search: Search the internet for current information.');
+  if (toolsEnabled.includes('code_execution')) toolDescriptions.push('- code_execution: Execute JavaScript code for calculations and data processing.');
+  if (toolsEnabled.includes('mcp_call')) {
+    const mcpNames = (agent.mcpServers || []).filter(s => s.enabled).map(s => `${s.name} (${s.tools.join(', ') || 'generic'})`);
+    toolDescriptions.push(`- MCP tools: ${mcpNames.join('; ')}`);
+  }
+
+  const responseSystem = toolDescriptions.length > 0
+    ? `${system}\n\nYou have access to the following tools:\n${toolDescriptions.join('\n')}\n\nWhen you use a tool, the results will be provided to you automatically.`
     : system;
 
   const responseHistory = innerThoughts
@@ -414,14 +436,16 @@ Be honest and analytical in your thinking. This is your private space.`;
   if (publicResult.toolCallsMade && publicResult.toolCallsMade.length > 0) {
     innerThoughts += '\n\n---\n**🔧 Tools Used:**\n';
     for (const tc of publicResult.toolCallsMade) {
-      innerThoughts += `\n**🔍 Web Search:** "${tc.query}"\n`;
+      const icon = tc.tool === 'web_search' ? '🔍' : tc.tool === 'code_execution' ? '💻' : '🔌';
+      const label = tc.tool === 'web_search' ? 'Web Search' : tc.tool === 'code_execution' ? 'Code Execution' : tc.tool;
+      innerThoughts += `\n**${icon} ${label}:** "${tc.query}"\n`;
       if (tc.sources.length > 0) {
         innerThoughts += `**📎 References:**\n`;
         tc.sources.forEach((src, i) => {
           innerThoughts += `${i + 1}. ${src}\n`;
         });
       }
-      innerThoughts += `**📄 Summary:** ${tc.result.slice(0, 500)}${tc.result.length > 500 ? '...' : ''}\n`;
+      innerThoughts += `**📄 Result:** ${tc.result.slice(0, 500)}${tc.result.length > 500 ? '...' : ''}\n`;
     }
   }
 
@@ -454,9 +478,11 @@ async function callProviderRaw(
   let tokensUsed: number | undefined;
   let toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> | undefined;
 
+  const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
+
   switch (agent.config.provider) {
     case 'lovable': {
-      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled);
+      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
       content = result.content;
       tokensUsed = result.usage?.total_tokens;
       toolCallsMade = result.toolCallsMade;

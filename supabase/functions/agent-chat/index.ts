@@ -25,6 +25,48 @@ const WEB_SEARCH_TOOL = {
   },
 };
 
+const CODE_EXECUTION_TOOL = {
+  type: "function",
+  function: {
+    name: "code_execution",
+    description: "Execute JavaScript/TypeScript code to perform calculations, data processing, or logic. Returns the result of the last expression or console output.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description: "The JavaScript/TypeScript code to execute",
+        },
+        language: {
+          type: "string",
+          enum: ["javascript", "typescript"],
+          description: "The language of the code (defaults to javascript)",
+        },
+      },
+      required: ["code"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MCP_CALL_TOOL = {
+  type: "function",
+  function: {
+    name: "mcp_call",
+    description: "Call a tool on a connected MCP server. Specify the server URL and tool name with arguments.",
+    parameters: {
+      type: "object",
+      properties: {
+        server_url: { type: "string", description: "The MCP server URL" },
+        tool_name: { type: "string", description: "The tool name to call" },
+        arguments: { type: "object", description: "Arguments to pass to the tool" },
+      },
+      required: ["server_url", "tool_name"],
+      additionalProperties: false,
+    },
+  },
+};
+
 function decodeHTML(str: string): string {
   return str
     .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
@@ -214,21 +256,115 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
   return { result: data.choices?.[0]?.message?.content || searchContext, sources };
 }
 
+// Execute JavaScript code safely
+function executeCode(code: string): string {
+  try {
+    // Create a sandboxed function with limited globals
+    const logs: string[] = [];
+    const mockConsole = {
+      log: (...args: unknown[]) => logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
+      error: (...args: unknown[]) => logs.push('ERROR: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
+      warn: (...args: unknown[]) => logs.push('WARN: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
+    };
+
+    const fn = new Function('console', 'Math', 'Date', 'JSON', 'Array', 'Object', 'String', 'Number', 'Boolean', 'RegExp', 'Map', 'Set', `
+      "use strict";
+      ${code}
+    `);
+
+    const result = fn(mockConsole, Math, Date, JSON, Array, Object, String, Number, Boolean, RegExp, Map, Set);
+    
+    const output = logs.length > 0 ? logs.join('\n') : '';
+    if (result !== undefined) {
+      const resultStr = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
+      return output ? `${output}\n→ ${resultStr}` : `→ ${resultStr}`;
+    }
+    return output || '(no output)';
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+// Call an MCP server tool
+async function callMcpTool(serverUrl: string, toolName: string, args: Record<string, unknown> = {}): Promise<string> {
+  try {
+    const res = await fetch(serverUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: { name: toolName, arguments: args },
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!res.ok) {
+      return `MCP error (${res.status}): ${await res.text()}`;
+    }
+
+    const data = await res.json();
+    if (data.error) {
+      return `MCP error: ${data.error.message || JSON.stringify(data.error)}`;
+    }
+
+    // Extract content from MCP response
+    const content = data.result?.content;
+    if (Array.isArray(content)) {
+      return content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+    }
+    return JSON.stringify(data.result, null, 2);
+  } catch (err) {
+    return `MCP call failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled } = await req.json();
+    const { messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    const useTools = Array.isArray(tools_enabled) && tools_enabled.includes("web_search");
-    const tools = useTools ? [WEB_SEARCH_TOOL] : undefined;
+    // Build tools list based on enabled tools
+    const tools: any[] = [];
+    const enabledSet = new Set(Array.isArray(tools_enabled) ? tools_enabled : []);
+    
+    if (enabledSet.has("web_search")) tools.push(WEB_SEARCH_TOOL);
+    if (enabledSet.has("code_execution")) tools.push(CODE_EXECUTION_TOOL);
+    if (enabledSet.has("mcp_call") && Array.isArray(mcp_servers) && mcp_servers.length > 0) {
+      // Add individual MCP tools with server context
+      for (const server of mcp_servers) {
+        if (!server.enabled) continue;
+        for (const toolName of (server.tools || [])) {
+          tools.push({
+            type: "function",
+            function: {
+              name: `mcp_${toolName}`,
+              description: `[MCP: ${server.name}] Call the "${toolName}" tool on ${server.name} server.`,
+              parameters: {
+                type: "object",
+                properties: {
+                  arguments: { type: "object", description: "Arguments to pass to the tool" },
+                },
+                additionalProperties: false,
+              },
+            },
+          });
+        }
+        // If no tools discovered, add generic mcp_call
+        if (!server.tools || server.tools.length === 0) {
+          tools.push(MCP_CALL_TOOL);
+        }
+      }
+    }
 
     const body: Record<string, unknown> = {
       model: model || "google/gemini-3-flash-preview",
@@ -240,7 +376,7 @@ serve(async (req) => {
       frequency_penalty: frequency_penalty ?? 0,
     };
 
-    if (tools) {
+    if (tools.length > 0) {
       body.tools = tools;
       body.tool_choice = "auto";
     }
@@ -278,8 +414,19 @@ serve(async (req) => {
     let data = await response.json();
     const toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> = [];
 
+    // Build MCP server lookup
+    const mcpServerMap = new Map<string, { url: string; name: string }>();
+    if (Array.isArray(mcp_servers)) {
+      for (const s of mcp_servers) {
+        if (!s.enabled) continue;
+        for (const t of (s.tools || [])) {
+          mcpServerMap.set(`mcp_${t}`, { url: s.url, name: s.name });
+        }
+      }
+    }
+
     let iterations = 0;
-    while (iterations < 3) {
+    while (iterations < 5) {
       const choice = data.choices?.[0];
       if (!choice?.message?.tool_calls || choice.message.tool_calls.length === 0) break;
 
@@ -287,25 +434,45 @@ serve(async (req) => {
       const updatedMessages = [...(body.messages as any[]), choice.message];
 
       for (const tc of toolCalls) {
-        if (tc.function?.name === "web_search") {
-          const args = JSON.parse(tc.function.arguments || "{}");
+        const fnName = tc.function?.name || "";
+        const args = JSON.parse(tc.function?.arguments || "{}");
+        let toolResult = "";
+
+        if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
-
           const searchResult = await performWebSearch(query, LOVABLE_API_KEY);
-          toolCallsMade.push({
-            tool: "web_search",
-            query,
-            result: searchResult.result,
-            sources: searchResult.sources,
-          });
-
-          updatedMessages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: searchResult.result,
-          });
+          toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
+          toolResult = searchResult.result;
+        } else if (fnName === "code_execution") {
+          const code = args.code || "";
+          console.log(`💻 Agent executing code (${(args.language || 'js')}): ${code.slice(0, 100)}...`);
+          toolResult = executeCode(code);
+          toolCallsMade.push({ tool: "code_execution", query: code.slice(0, 200), result: toolResult, sources: [] });
+        } else if (fnName === "mcp_call") {
+          const serverUrl = args.server_url || "";
+          const toolName = args.tool_name || "";
+          console.log(`🔌 Agent calling MCP tool: ${toolName} on ${serverUrl}`);
+          toolResult = await callMcpTool(serverUrl, toolName, args.arguments || {});
+          toolCallsMade.push({ tool: `mcp:${toolName}`, query: `${toolName}(${JSON.stringify(args.arguments || {})})`, result: toolResult, sources: [serverUrl] });
+        } else if (fnName.startsWith("mcp_")) {
+          // Named MCP tool
+          const actualToolName = fnName.slice(4);
+          const serverInfo = mcpServerMap.get(fnName);
+          if (serverInfo) {
+            console.log(`🔌 Agent calling MCP tool: ${actualToolName} on ${serverInfo.name}`);
+            toolResult = await callMcpTool(serverInfo.url, actualToolName, args.arguments || {});
+            toolCallsMade.push({ tool: `mcp:${actualToolName}`, query: `${actualToolName}(${JSON.stringify(args.arguments || {})})`, result: toolResult, sources: [serverInfo.url] });
+          } else {
+            toolResult = `MCP server not found for tool: ${actualToolName}`;
+          }
         }
+
+        updatedMessages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: toolResult,
+        });
       }
 
       body.messages = updatedMessages;

@@ -11,6 +11,14 @@ export interface AgentConfig {
   frequencyPenalty: number;
 }
 
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  url: string;
+  tools: string[]; // discovered tool names
+  enabled: boolean;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -25,6 +33,7 @@ export interface Agent {
   researchLoops: number; // 0-5, number of private research iterations before public response
   memoryScopeDefault: 'global' | 'local' | 'both';
   skills: string[];
+  mcpServers: McpServerConfig[];
   permissions: {
     webSearch: boolean;
     fileRead: boolean;
