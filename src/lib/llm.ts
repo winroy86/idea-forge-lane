@@ -1,10 +1,11 @@
-import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction } from '@/types';
+import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta } from '@/types';
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 
 interface LLMResponse {
   content: string;
   innerThoughts?: string;
+  codeBlocks?: CodeBlockMeta[];
   tokensUsed?: number;
   latencyMs: number;
   model: string;
@@ -411,28 +412,31 @@ Be honest and analytical in your thinking. This is your private space.`;
   // --- Pass 2: Public response ---
   const toolDescriptions: string[] = [];
   if (toolsEnabled.includes('web_search')) toolDescriptions.push('- web_search: Search the internet for current information.');
-  if (toolsEnabled.includes('code_execution')) toolDescriptions.push('- code_execution: Execute JavaScript code for calculations and data processing.');
+  if (toolsEnabled.includes('code_execution')) toolDescriptions.push('- code_execution: Execute JavaScript code for calculations and data processing. When you use code execution, include the code and results in your response using markdown code blocks so the group can see your work.');
   if (toolsEnabled.includes('mcp_call')) {
     const mcpNames = (agent.mcpServers || []).filter(s => s.enabled).map(s => `${s.name} (${s.tools.join(', ') || 'generic'})`);
     toolDescriptions.push(`- MCP tools: ${mcpNames.join('; ')}`);
   }
 
   const responseSystem = toolDescriptions.length > 0
-    ? `${system}\n\nYou have access to the following tools:\n${toolDescriptions.join('\n')}\n\nWhen you use a tool, the results will be provided to you automatically.`
+    ? `${system}\n\nYou have access to the following tools:\n${toolDescriptions.join('\n')}\n\nWhen you use a tool, the results will be provided to you automatically.\n\nIMPORTANT: When you execute code, ALWAYS include the code you ran and the output in your public response using markdown code blocks. The group should be able to see and verify your calculations.`
     : system;
 
   const responseHistory = innerThoughts
     ? [
         ...history,
         { role: 'assistant' as const, content: `[My private analysis]: ${innerThoughts}` },
-        { role: 'user' as const, content: 'Now provide your PUBLIC response to the group. Be concise and impactful. Do NOT reveal your private thinking process — just share your conclusion and arguments.' },
+        { role: 'user' as const, content: 'Now provide your PUBLIC response to the group. Be concise and impactful. Do NOT reveal your private thinking process — just share your conclusion and arguments. If you used code execution, include the code and output in your response.' },
       ]
     : history;
 
   const publicResult = await callProviderRaw(agent, responseSystem, responseHistory, toolsEnabled.length > 0 ? toolsEnabled : undefined);
   tokensUsed = (tokensUsed || 0) + (publicResult.tokensUsed || 0);
 
-  // Append tool usage info to inner thoughts
+  // Build structured code blocks from tool calls
+  const codeBlocks: CodeBlockMeta[] = [];
+
+  // Inner thought code blocks (from tool calls made during public response)
   if (publicResult.toolCallsMade && publicResult.toolCallsMade.length > 0) {
     innerThoughts += '\n\n---\n**🔧 Tools Used:**\n';
     for (const tc of publicResult.toolCallsMade) {
@@ -446,6 +450,33 @@ Be honest and analytical in your thinking. This is your private space.`;
         });
       }
       innerThoughts += `**📄 Result:** ${tc.result.slice(0, 500)}${tc.result.length > 500 ? '...' : ''}\n`;
+
+      // Add inner code blocks for code execution tool calls
+      if (tc.tool === 'code_execution') {
+        codeBlocks.push({
+          code: tc.query, // the code that was executed
+          language: 'javascript',
+          output: tc.result,
+          label: 'Executed Code',
+          context: 'inner',
+        });
+      }
+    }
+  }
+
+  // Extract public code blocks from the agent's response content (markdown ```blocks```)
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(publicResult.content)) !== null) {
+    const lang = match[1] || 'javascript';
+    const code = match[2].trim();
+    if (code.length > 0) {
+      codeBlocks.push({
+        code,
+        language: lang,
+        label: `Shared Code (${lang})`,
+        context: 'public',
+      });
     }
   }
 
@@ -460,6 +491,7 @@ Be honest and analytical in your thinking. This is your private space.`;
   return {
     content: publicResult.content,
     innerThoughts: innerThoughts || undefined,
+    codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     tokensUsed,
     latencyMs,
     model: agent.config.model,
