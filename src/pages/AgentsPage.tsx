@@ -76,6 +76,8 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
       config: { ...DEFAULT_CONFIG },
       colorIndex: Math.floor(Math.random() * 6),
       memoryEnabled: true,
+      researchLoops: 0,
+      memoryScopeDefault: 'both',
       skills: [],
       permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
       createdAt: new Date().toISOString(),
@@ -244,6 +246,28 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
               <Label className="text-xs">Long-term Memory</Label>
               <Switch checked={form.memoryEnabled} onCheckedChange={v => update({ memoryEnabled: v })} />
             </div>
+            {form.memoryEnabled && (
+              <>
+                <div className="mt-2">
+                  <Label className="text-xs">Research Loops: {form.researchLoops || 0}</Label>
+                  <p className="text-[10px] text-muted-foreground mb-1">Private research iterations before each public response</p>
+                  <Slider value={[form.researchLoops || 0]} onValueChange={([v]) => update({ researchLoops: v })} min={0} max={5} step={1} />
+                </div>
+                <div className="mt-2">
+                  <Label className="text-xs">Memory Scope Default</Label>
+                  <Select value={form.memoryScopeDefault || 'both'} onValueChange={v => update({ memoryScopeDefault: v as any })}>
+                    <SelectTrigger className="h-8 text-xs mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="global">Global (carry across rooms)</SelectItem>
+                      <SelectItem value="local">Local (fresh per room)</SelectItem>
+                      <SelectItem value="both">Both (global + local)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -295,6 +319,8 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
         config: { ...DEFAULT_CONFIG },
         colorIndex: Math.floor(Math.random() * 6),
         memoryEnabled: true,
+        researchLoops: 0,
+        memoryScopeDefault: 'both',
         skills: [],
         permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
         createdAt: new Date().toISOString(),

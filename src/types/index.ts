@@ -22,6 +22,8 @@ export interface Agent {
   config: AgentConfig;
   colorIndex: number;
   memoryEnabled: boolean;
+  researchLoops: number; // 0-5, number of private research iterations before public response
+  memoryScopeDefault: 'global' | 'local' | 'both';
   skills: string[];
   permissions: {
     webSearch: boolean;
@@ -86,3 +88,17 @@ export interface ProviderConfig {
 }
 
 export type SummarizerAction = 'summarize' | 'decisions' | 'actionPlan' | 'updateMemory';
+
+export type MemoryCategory = 'long-term' | 'short-term' | 'research' | 'task' | 'scratch';
+export type MemoryScope = 'global' | string; // string = roomId
+
+export interface AgentMemoryFile {
+  id: string;
+  agentId: string;
+  scope: MemoryScope;
+  filename: string;
+  category: MemoryCategory;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
