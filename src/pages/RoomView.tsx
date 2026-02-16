@@ -7,7 +7,7 @@ import {
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
   Upload, Eye, EyeOff, Paperclip, Trash2, Database
 } from 'lucide-react';
-import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument } from '@/types';
+import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument, CodeBlockMeta } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId
 } from '@/lib/store';
@@ -15,6 +15,7 @@ import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import ResearchProgressBar from '@/components/ResearchProgressBar';
+import CodeExecutionPanel from '@/components/CodeExecutionPanel';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,7 +35,7 @@ function getAgentColor(index: number) {
   return AGENT_COLORS[index % AGENT_COLORS.length];
 }
 
-function InnerThoughtsBlock({ thoughts, agentName }: { thoughts: string; agentName: string }) {
+function InnerThoughtsBlock({ thoughts, agentName, codeBlocks }: { thoughts: string; agentName: string; codeBlocks?: CodeBlockMeta[] }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -45,6 +46,9 @@ function InnerThoughtsBlock({ thoughts, agentName }: { thoughts: string; agentNa
       >
         <Brain className="h-3 w-3 shrink-0" />
         <span className="font-medium">{agentName}'s inner thoughts</span>
+        {codeBlocks && codeBlocks.length > 0 && (
+          <span className="text-[9px] bg-muted px-1 py-0.5 rounded">💻 {codeBlocks.length} code exec</span>
+        )}
         <span className="ml-auto text-[9px] italic opacity-60">(only you can see this)</span>
         {expanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
       </button>
@@ -53,6 +57,9 @@ function InnerThoughtsBlock({ thoughts, agentName }: { thoughts: string; agentNa
           <div className="mt-2 text-xs text-muted-foreground italic leading-relaxed prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
             <ReactMarkdown>{thoughts}</ReactMarkdown>
           </div>
+          {codeBlocks && codeBlocks.length > 0 && (
+            <CodeExecutionPanel blocks={codeBlocks} />
+          )}
         </div>
       )}
     </div>
@@ -249,6 +256,7 @@ export default function RoomView() {
         role: 'agent',
         content: result.content,
         innerThoughts: result.innerThoughts,
+        codeBlocks: result.codeBlocks,
         timestamp: new Date().toISOString(),
         metadata: {
           model: result.model,
@@ -383,6 +391,7 @@ export default function RoomView() {
           role: 'agent',
           content: result.content,
           innerThoughts: result.innerThoughts,
+          codeBlocks: result.codeBlocks,
           timestamp: new Date().toISOString(),
           metadata: {
             model: result.model,
@@ -527,9 +536,13 @@ export default function RoomView() {
                   <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
+                  {/* Code execution panel - shows public shared code blocks */}
+                  {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
+                    <CodeExecutionPanel blocks={msg.codeBlocks.filter(b => b.context === 'public')} />
+                  )}
                   {/* Inner thoughts - only visible to the user, styled differently */}
                   {msg.innerThoughts && agent && (
-                    <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} />
+                    <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
                   {msg.metadata && (
                     <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">

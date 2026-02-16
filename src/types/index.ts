@@ -70,6 +70,14 @@ export interface Room {
 
 export type OrchestrationType = 'manual' | 'sequence' | 'loop' | 'auto';
 
+export interface CodeBlockMeta {
+  code: string;
+  language: string;
+  output?: string;
+  label?: string;
+  context: 'public' | 'inner';
+}
+
 export interface Message {
   id: string;
   roomId: string;
@@ -77,6 +85,7 @@ export interface Message {
   role: 'user' | 'agent' | 'system' | 'summarizer';
   content: string;
   innerThoughts?: string; // agent's private reasoning (visible to user, not to other agents)
+  codeBlocks?: CodeBlockMeta[]; // structured code execution results
   timestamp: string;
   parentId?: string; // for branching
   metadata?: {
