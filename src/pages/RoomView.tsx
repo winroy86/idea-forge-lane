@@ -109,22 +109,75 @@ export default function RoomView() {
   };
 
   // --- Document handling ---
+  const isTextFile = (name: string): boolean => {
+    const textExts = ['.txt', '.md', '.json', '.csv', '.xml', '.html', '.htm', '.js', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.css', '.scss', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bat', '.sql', '.r', '.tex', '.bib'];
+    return textExts.some(ext => name.toLowerCase().endsWith(ext));
+  };
+
+  const extractWithAI = async (file: File): Promise<string> => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    if (!supabaseUrl) throw new Error('Cloud not configured');
+
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+      },
+      body: JSON.stringify({
+        fileBase64: base64,
+        fileName: file.name,
+        mimeType: file.type || 'application/pdf',
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Extraction failed' }));
+      throw new Error(err.error || `Extraction failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    return data.text || '';
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || !room) return;
 
     for (const file of Array.from(files)) {
-      if (file.size > 5 * 1024 * 1024) {
-        toast({ title: 'File too large', description: `${file.name} exceeds 5MB limit`, variant: 'destructive' });
+      if (file.size > 20 * 1024 * 1024) {
+        toast({ title: 'File too large', description: `${file.name} exceeds 20MB limit`, variant: 'destructive' });
         continue;
       }
 
       try {
-        const content = await file.text();
+        let content = '';
+
+        if (isTextFile(file.name)) {
+          content = await file.text();
+        } else {
+          // Use AI extraction for PDFs, DOCX, images, etc.
+          toast({ title: `🔍 Extracting text from ${file.name}…`, description: 'Using AI to read document content' });
+          content = await extractWithAI(file);
+        }
+
+        if (!content || content.trim().length < 10) {
+          toast({ title: 'No content extracted', description: `Could not read text from ${file.name}`, variant: 'destructive' });
+          continue;
+        }
+
         const doc: RoomDocument = {
           id: generateId(),
           name: file.name,
-          content: content.slice(0, 50000), // limit to ~50k chars
+          content: content.slice(0, 50000),
           addedAt: new Date().toISOString(),
         };
         const updated = {
@@ -134,13 +187,12 @@ export default function RoomView() {
         };
         upsertRoom(updated);
         setRoom(updated);
-        toast({ title: `📄 ${file.name} loaded`, description: `${content.length.toLocaleString()} characters` });
-      } catch {
-        toast({ title: 'Failed to read file', description: file.name, variant: 'destructive' });
+        toast({ title: `📄 ${file.name} loaded`, description: `${content.length.toLocaleString()} characters extracted` });
+      } catch (err: any) {
+        toast({ title: 'Failed to read file', description: err.message || file.name, variant: 'destructive' });
       }
     }
 
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -552,7 +604,7 @@ export default function RoomView() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java,.go,.rs,.c,.cpp,.h,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql"
+              accept=".txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java,.go,.rs,.c,.cpp,.h,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql,.pdf,.docx,.doc,.pptx,.xlsx,.png,.jpg,.jpeg,.webp"
               multiple
               onChange={handleFileUpload}
               className="hidden"
