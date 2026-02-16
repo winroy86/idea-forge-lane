@@ -1,5 +1,6 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction } from '@/types';
 import { getProviders } from '@/lib/store';
+import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 
 interface LLMResponse {
   content: string;
@@ -21,7 +22,7 @@ function findProvider(providerType: string, baseUrl?: string): ProviderConfig | 
   return providers.find(p => p.provider === providerType && p.isActive) || null;
 }
 
-function buildSystemMessage(agent: Agent, documents: RoomDocument[] = []): string {
+function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId?: string): string {
   let prompt = agent.systemPrompt || `You are ${agent.name}, a ${agent.role}.`;
   if (agent.domain) prompt += `\nYour area of expertise is: ${agent.domain}.`;
   if (agent.pointOfView) prompt += `\nYour perspective/point of view: ${agent.pointOfView}.`;
@@ -33,12 +34,17 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = []): strin
     });
     prompt += `\n--- END DOCUMENTS ---\n`;
   }
+  // Inject agent memories if memory is enabled
+  if (agent.memoryEnabled) {
+    const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
+    if (memoryContext) prompt += memoryContext;
+  }
   prompt += `\nKeep your responses concise and focused. You are participating in a multi-agent brainstorming session.`;
   return prompt;
 }
 
-function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = []) {
-  const system = buildSystemMessage(agent, documents);
+function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string) {
+  const system = buildSystemMessage(agent, documents, roomId);
   // Only include public content - inner thoughts are private and not shared
   const history = messages.map(m => {
     if (m.role === 'user') {
@@ -230,11 +236,19 @@ async function callLovableAI(
 
 // ---- Main entry point ----
 
+export interface ResearchLoopProgress {
+  currentLoop: number;
+  totalLoops: number;
+  activity: string;
+}
+
 export async function callAgent(
   agent: Agent,
   messages: Message[],
   allAgents: Agent[],
   documents: RoomDocument[] = [],
+  roomId?: string,
+  onLoopProgress?: (progress: ResearchLoopProgress) => void,
 ): Promise<LLMResponse> {
   if (agent.config.provider !== 'lovable') {
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
@@ -243,7 +257,7 @@ export async function callAgent(
     }
   }
 
-  const { system, history } = buildChatMessages(agent, messages, allAgents, documents);
+  const { system, history } = buildChatMessages(agent, messages, allAgents, documents, roomId);
   const start = performance.now();
 
   // Determine which tools are enabled for this agent
@@ -252,8 +266,90 @@ export async function callAgent(
     toolsEnabled.push('web_search');
   }
 
+  let innerThoughts = '';
+  let tokensUsed: number | undefined;
+
+  const researchLoops = agent.researchLoops || 0;
+
+  // --- Research Loops (private iterations) ---
+  if (researchLoops > 0 && agent.memoryEnabled) {
+    for (let loop = 1; loop <= researchLoops; loop++) {
+      onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: 'Researching...' });
+
+      const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
+      const researchSystem = `${system}
+
+YOU ARE IN PRIVATE RESEARCH MODE (Loop ${loop}/${researchLoops}). No one can see this.
+Your goal: deeply research and prepare before your public response.
+
+${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
+
+INSTRUCTIONS:
+1. Review the conversation and identify knowledge gaps
+2. Think about what you need to research or verify
+3. Write your findings to memory files using the format below
+${toolsEnabled.includes('web_search') ? '4. Use web search if you need current information' : ''}
+
+OUTPUT FORMAT - respond with structured actions:
+THINK: [your reasoning about what to research next]
+WRITE_MEMORY|[scope]|[filename]|[category]|[content]
+  - scope: "global" or "local" 
+  - filename: descriptive name like "research-findings.md"
+  - category: long-term, short-term, research, task, or scratch
+  - content: markdown content to write
+
+Example:
+THINK: I need to research the latest developments in quantum computing to support my argument.
+WRITE_MEMORY|local|quantum-research.md|research|## Quantum Computing Findings\n- Key point 1\n- Key point 2
+WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New insight about the topic`;
+
+      const loopAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1500) } };
+      const loopResult = await callProviderRaw(loopAgent, researchSystem, history, toolsEnabled.length > 0 ? toolsEnabled : undefined);
+      tokensUsed = (tokensUsed || 0) + (loopResult.tokensUsed || 0);
+
+      // Parse and execute memory actions
+      const lines = loopResult.content.split('\n');
+      let loopSummary = `**🔄 Research Loop ${loop}/${researchLoops}:**\n`;
+      const scope = roomId || 'global';
+
+      for (const line of lines) {
+        if (line.startsWith('THINK:')) {
+          loopSummary += `💭 ${line.slice(6).trim()}\n`;
+        } else if (line.startsWith('WRITE_MEMORY|')) {
+          const parts = line.split('|');
+          if (parts.length >= 5) {
+            const memScope = parts[1] === 'global' ? 'global' : (roomId || 'global');
+            const filename = parts[2];
+            const category = parts[3] as any;
+            const content = parts.slice(4).join('|').replace(/\\n/g, '\n');
+            writeMemoryFile(agent.id, memScope, filename, content, category);
+            onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: `Writing ${filename}...` });
+            loopSummary += `📝 Wrote: ${filename} (${memScope}, ${category})\n`;
+          }
+        }
+      }
+
+      // Track tool calls from research loop
+      if (loopResult.toolCallsMade && loopResult.toolCallsMade.length > 0) {
+        for (const tc of loopResult.toolCallsMade) {
+          loopSummary += `🔍 Searched: "${tc.query}"\n`;
+          if (tc.sources.length > 0) {
+            loopSummary += `📎 Sources: ${tc.sources.slice(0, 3).join(', ')}\n`;
+          }
+        }
+      }
+
+      innerThoughts += loopSummary + '\n';
+    }
+
+    onLoopProgress?.({ currentLoop: researchLoops, totalLoops: researchLoops, activity: 'Preparing response...' });
+  }
+
   // --- Pass 1: Inner reasoning (chain of thought) ---
-  const thinkingSystem = `${system}
+  if (messages.length > 0 || documents.length > 0) {
+    const updatedMemoryContext = agent.memoryEnabled ? getMemorySummaryForPrompt(agent.id, roomId) : '';
+    const thinkingSystem = `${system}
+${updatedMemoryContext}
 
 IMPORTANT: You are now in your PRIVATE THINKING mode. The other agents CANNOT see this.
 Analyze the conversation so far and any reference documents.
@@ -263,24 +359,18 @@ Think through:
 3. What are the strengths and weaknesses of other agents' arguments?
 4. What insights from the documents (if any) are relevant?
 5. What's your strategy for your response?
-${toolsEnabled.includes('web_search') ? '6. Do you need to search the internet for any information? If so, what queries would help?' : ''}
+${agent.memoryEnabled ? '6. What relevant information do you have in your memories?' : ''}
+${toolsEnabled.includes('web_search') ? '7. Do you need to search the internet for any information? If so, what queries would help?' : ''}
 
 Be honest and analytical in your thinking. This is your private space.`;
 
-  const thinkingAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1024) } };
-
-  let innerThoughts = '';
-  let tokensUsed: number | undefined;
-
-  // Only do inner thoughts if there's conversation context or documents
-  if (messages.length > 0 || documents.length > 0) {
+    const thinkingAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1024) } };
     const thinkResult = await callProviderRaw(thinkingAgent, thinkingSystem, history);
-    innerThoughts = thinkResult.content;
-    tokensUsed = thinkResult.tokensUsed;
+    innerThoughts += thinkResult.content;
+    tokensUsed = (tokensUsed || 0) + (thinkResult.tokensUsed || 0);
   }
 
-  // --- Pass 2: Public response (what the agent says to the group) ---
-  // For the public response, enable tools so the agent can search if needed
+  // --- Pass 2: Public response ---
   const responseSystem = toolsEnabled.length > 0
     ? `${system}\n\nYou have access to the following tools:\n- web_search: Search the internet for current information. Use it when you need facts, data, or recent information you're not sure about.\n\nWhen you use a tool, the results will be provided to you automatically.`
     : system;
@@ -309,6 +399,12 @@ Be honest and analytical in your thinking. This is your private space.`;
       }
       innerThoughts += `**📄 Summary:** ${tc.result.slice(0, 500)}${tc.result.length > 500 ? '...' : ''}\n`;
     }
+  }
+
+  // Auto-save short-term memory of this response if memory enabled
+  if (agent.memoryEnabled && roomId) {
+    const shortTermContent = `## Response at ${new Date().toISOString()}\n**Topic:** ${messages[messages.length - 1]?.content?.slice(0, 100) || 'conversation'}\n**Key points from my response:** ${publicResult.content.slice(0, 500)}`;
+    writeMemoryFile(agent.id, roomId, `response-${Date.now()}.md`, shortTermContent, 'short-term');
   }
 
   const latencyMs = Math.round(performance.now() - start);

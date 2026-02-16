@@ -5,13 +5,15 @@ import {
   ArrowLeft, Send, Plus, Play, Pause, SkipForward,
   ListOrdered, RotateCcw, Sparkles, FileText, CheckSquare,
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
-  Upload, Eye, EyeOff, Paperclip, Trash2
+  Upload, Eye, EyeOff, Paperclip, Trash2, Database
 } from 'lucide-react';
 import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId
 } from '@/lib/store';
-import { callAgent, callSummarizer } from '@/lib/llm';
+import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
+import { getAgentMemories } from '@/lib/agentMemory';
+import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -71,6 +73,8 @@ export default function RoomView() {
   const [autoRunning, setAutoRunning] = useState(false);
   const [autoRoundCount, setAutoRoundCount] = useState(0);
   const [maxAutoRounds, setMaxAutoRounds] = useState(3);
+  const [loopProgress, setLoopProgress] = useState<ResearchLoopProgress | null>(null);
+  const [memoryPanelAgentId, setMemoryPanelAgentId] = useState<string | null>(null);
   const autoRunningRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -232,8 +236,11 @@ export default function RoomView() {
     if (!agent || !room || loadingAgentId) return;
 
     setLoadingAgentId(agentId);
+    setLoopProgress(null);
     try {
-      const result = await callAgent(agent, messages, allAgents, room.documents || []);
+      const result = await callAgent(agent, messages, allAgents, room.documents || [], room.id, (progress) => {
+        setLoopProgress(progress);
+      });
       const msg: Message = {
         id: generateId(),
         roomId: room.id,
@@ -260,6 +267,7 @@ export default function RoomView() {
       toast({ title: 'Agent error', description: err.message, variant: 'destructive' });
     } finally {
       setLoadingAgentId(null);
+      setLoopProgress(null);
     }
   };
 
@@ -360,8 +368,11 @@ export default function RoomView() {
       if (!nextAgent) break;
 
       setLoadingAgentId(nextAgent.id);
+      setLoopProgress(null);
       try {
-        const result = await callAgent(nextAgent, currentMessages, allAgents, room.documents || []);
+        const result = await callAgent(nextAgent, currentMessages, allAgents, room.documents || [], room.id, (progress) => {
+          setLoopProgress(progress);
+        });
         if (!autoRunningRef.current) break;
 
         const msg: Message = {
@@ -391,6 +402,7 @@ export default function RoomView() {
         break;
       } finally {
         setLoadingAgentId(null);
+        setLoopProgress(null);
       }
     }
 
@@ -664,8 +676,27 @@ export default function RoomView() {
                 disabled={!!loadingAgentId}
                 className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors disabled:opacity-50"
               >
-                {loadingAgentId === agent.id ? 'Thinking…' : 'Speak now'}
+                {loadingAgentId === agent.id
+                  ? (loopProgress
+                    ? `Loop ${loopProgress.currentLoop}/${loopProgress.totalLoops}: ${loopProgress.activity}`
+                    : 'Thinking…')
+                  : 'Speak now'}
               </button>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                {agent.memoryEnabled && (agent.researchLoops || 0) > 0 && (
+                  <span className="text-[9px] text-accent bg-accent/10 rounded px-1.5 py-0.5">
+                    🔄 {agent.researchLoops} loops
+                  </span>
+                )}
+                {agent.memoryEnabled && (
+                  <button
+                    onClick={() => setMemoryPanelAgentId(memoryPanelAgentId === agent.id ? null : agent.id)}
+                    className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+                  >
+                    <Database className="h-2.5 w-2.5" /> Memory
+                  </button>
+                )}
+              </div>
             </div>
           ))}
 
@@ -749,6 +780,20 @@ export default function RoomView() {
           </div>
         </div>
       </div>
+
+      {/* Agent Memory Panel */}
+      {memoryPanelAgentId && (() => {
+        const agent = allAgents.find(a => a.id === memoryPanelAgentId);
+        if (!agent) return null;
+        return (
+          <AgentMemoryPanel
+            agentId={agent.id}
+            agentName={agent.name}
+            roomId={room.id}
+            onClose={() => setMemoryPanelAgentId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
