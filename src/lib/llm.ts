@@ -183,7 +183,8 @@ async function callLovableAI(
   system: string,
   history: { role: string; content: string }[],
   agent: Agent,
-): Promise<{ content: string; usage?: { total_tokens?: number } }> {
+  toolsEnabled?: string[],
+): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
 
@@ -204,6 +205,7 @@ async function callLovableAI(
       top_p: agent.config.topP,
       presence_penalty: agent.config.presencePenalty,
       frequency_penalty: agent.config.frequencyPenalty,
+      tools_enabled: toolsEnabled,
     }),
   });
 
@@ -222,6 +224,7 @@ async function callLovableAI(
   return {
     content: data.choices?.[0]?.message?.content || 'No response',
     usage: data.usage,
+    toolCallsMade: data._toolCallsMade,
   };
 }
 
@@ -243,6 +246,12 @@ export async function callAgent(
   const { system, history } = buildChatMessages(agent, messages, allAgents, documents);
   const start = performance.now();
 
+  // Determine which tools are enabled for this agent
+  const toolsEnabled: string[] = [];
+  if (agent.permissions?.webSearch) {
+    toolsEnabled.push('web_search');
+  }
+
   // --- Pass 1: Inner reasoning (chain of thought) ---
   const thinkingSystem = `${system}
 
@@ -254,6 +263,7 @@ Think through:
 3. What are the strengths and weaknesses of other agents' arguments?
 4. What insights from the documents (if any) are relevant?
 5. What's your strategy for your response?
+${toolsEnabled.includes('web_search') ? '6. Do you need to search the internet for any information? If so, what queries would help?' : ''}
 
 Be honest and analytical in your thinking. This is your private space.`;
 
@@ -270,6 +280,11 @@ Be honest and analytical in your thinking. This is your private space.`;
   }
 
   // --- Pass 2: Public response (what the agent says to the group) ---
+  // For the public response, enable tools so the agent can search if needed
+  const responseSystem = toolsEnabled.length > 0
+    ? `${system}\n\nYou have access to the following tools:\n- web_search: Search the internet for current information. Use it when you need facts, data, or recent information you're not sure about.\n\nWhen you use a tool, the results will be provided to you automatically.`
+    : system;
+
   const responseHistory = innerThoughts
     ? [
         ...history,
@@ -278,8 +293,23 @@ Be honest and analytical in your thinking. This is your private space.`;
       ]
     : history;
 
-  const publicResult = await callProviderRaw(agent, system, responseHistory);
+  const publicResult = await callProviderRaw(agent, responseSystem, responseHistory, toolsEnabled.length > 0 ? toolsEnabled : undefined);
   tokensUsed = (tokensUsed || 0) + (publicResult.tokensUsed || 0);
+
+  // Append tool usage info to inner thoughts
+  if (publicResult.toolCallsMade && publicResult.toolCallsMade.length > 0) {
+    innerThoughts += '\n\n---\n**🔧 Tools Used:**\n';
+    for (const tc of publicResult.toolCallsMade) {
+      innerThoughts += `\n**🔍 Web Search:** "${tc.query}"\n`;
+      if (tc.sources.length > 0) {
+        innerThoughts += `**📎 References:**\n`;
+        tc.sources.forEach((src, i) => {
+          innerThoughts += `${i + 1}. ${src}\n`;
+        });
+      }
+      innerThoughts += `**📄 Summary:** ${tc.result.slice(0, 500)}${tc.result.length > 500 ? '...' : ''}\n`;
+    }
+  }
 
   const latencyMs = Math.round(performance.now() - start);
 
@@ -298,15 +328,18 @@ async function callProviderRaw(
   agent: Agent,
   system: string,
   history: { role: string; content: string }[],
-): Promise<{ content: string; tokensUsed?: number }> {
+  toolsEnabled?: string[],
+): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
   let content = '';
   let tokensUsed: number | undefined;
+  let toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> | undefined;
 
   switch (agent.config.provider) {
     case 'lovable': {
-      const result = await callLovableAI(agent.config.model, system, history, agent);
+      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled);
       content = result.content;
       tokensUsed = result.usage?.total_tokens;
+      toolCallsMade = result.toolCallsMade;
       break;
     }
     case 'anthropic': {
@@ -348,7 +381,7 @@ async function callProviderRaw(
     }
   }
 
-  return { content, tokensUsed };
+  return { content, tokensUsed, toolCallsMade };
 }
 
 // ---- Summarizer (uses first available provider) ----
