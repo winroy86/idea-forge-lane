@@ -10,6 +10,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { capabilities, capabilityLabel } from '@/lib/capabilities';
 
 interface LayoutContextType {
   sidebarOpen: boolean;
@@ -105,6 +106,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <Menu className="h-5 w-5" />
             </button>
             <div className="hidden md:block" />
+            <div className="ml-auto hidden items-center gap-2 text-[11px] text-muted-foreground lg:flex">
+              <span className="font-medium">Capabilities:</span>
+              <span className={capabilities.supabase ? 'text-emerald-500' : 'text-amber-500'}>
+                Supabase {capabilityLabel(capabilities.supabase)}
+              </span>
+              <span className={capabilities.personaGeneration ? 'text-emerald-500' : 'text-amber-500'}>
+                Persona gen {capabilityLabel(capabilities.personaGeneration)}
+              </span>
+              <span className={capabilities.documentExtraction ? 'text-emerald-500' : 'text-amber-500'}>
+                Doc extraction {capabilityLabel(capabilities.documentExtraction)}
+              </span>
+            </div>
           </header>
 
           <main className="flex-1 overflow-auto">{children}</main>

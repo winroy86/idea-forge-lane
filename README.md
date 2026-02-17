@@ -36,6 +36,43 @@ npm i
 npm run dev
 ```
 
+## Environment configuration
+
+Copy `.env.example` to `.env` and fill values only when you want cloud features:
+
+```sh
+cp .env.example .env
+```
+
+### Local-first mode (no env vars)
+
+If `.env` is empty, the app still boots and all local features work (Rooms, Agents, Skills, Providers via browser storage).
+
+### Cloud-enabled mode (Supabase)
+
+Set both values to enable:
+
+- Persona generation
+- Document extraction for non-text formats
+- Lovable cloud chat/summarizer path
+
+Required vars:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+The app header includes a **Capabilities** indicator showing which of these are enabled at runtime.
+
+## Production smoke boot
+
+Validate production boot locally:
+
+```sh
+npm run smoke:prod
+```
+
+This runs a production build and starts Vite preview.
+
 **Edit a file directly in GitHub**
 
 - Navigate to the desired file(s).

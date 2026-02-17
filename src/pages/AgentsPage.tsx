@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
@@ -542,6 +542,15 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
   const generate = async () => {
     if (mode === 'famous' && !personName.trim()) return;
     if (mode === 'custom' && !description.trim()) return;
+
+    if (!supabase || !hasSupabaseConfig) {
+      toast({
+        title: 'Persona generation unavailable',
+        description: 'Configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to enable this feature.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     setIsGenerating(true);
     try {

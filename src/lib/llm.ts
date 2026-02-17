@@ -218,7 +218,10 @@ async function callLovableAI(
   mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
 ): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Cloud provider is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
+  }
 
   const bodyPayload: Record<string, unknown> = {
     model: model || 'google/gemini-3-flash-preview',
@@ -242,7 +245,7 @@ async function callLovableAI(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+      Authorization: `Bearer ${supabaseKey}`,
     },
     body: JSON.stringify(bodyPayload),
   });

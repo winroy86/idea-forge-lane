@@ -283,7 +283,9 @@ export default function RoomView() {
 
   const extractWithAI = async (file: File): Promise<string> => {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (!supabaseUrl) throw new Error('Cloud not configured');
+    if (!supabaseUrl || !import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
+      throw new Error('Document extraction is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
+    }
 
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
