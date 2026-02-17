@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, MessageSquare, Users, Trash2, Edit2 } from 'lucide-react';
-import { Room } from '@/types';
-import { getRooms, deleteRoom, generateId, upsertRoom } from '@/lib/store';
+import { Plus, MessageSquare, Users, Trash2, Edit2, Timer } from 'lucide-react';
+import { Room, MeetingSession } from '@/types';
+import { getRooms, deleteRoom, generateId, upsertRoom, getAllMeetings } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -33,6 +33,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
       orchestration: 'manual',
       balanceSlider: 50,
       documents: [],
+      meetings: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -86,9 +87,13 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
 
 export default function Dashboard() {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [meetings, setMeetings] = useState<MeetingSession[]>([]);
   const navigate = useNavigate();
 
-  const refresh = () => setRooms(getRooms().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  const refresh = () => {
+    setRooms(getRooms().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+    setMeetings(getAllMeetings());
+  };
   useEffect(refresh, []);
 
   const handleDelete = (id: string) => {
@@ -150,6 +155,15 @@ export default function Dashboard() {
                   {room.agentIds.length} agents
                 </span>
                 <span className="capitalize">{room.orchestration}</span>
+                {room.activeMeetingId && (() => {
+                  const m = meetings.find(mt => mt.id === room.activeMeetingId);
+                  return m && (m.status === 'active' || m.status === 'wrap-up') ? (
+                    <span className="flex items-center gap-1 text-accent font-medium">
+                      <Timer className="h-3 w-3 animate-pulse" />
+                      Meeting
+                    </span>
+                  ) : null;
+                })()}
               </div>
             </div>
           ))}

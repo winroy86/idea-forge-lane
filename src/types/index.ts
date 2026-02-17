@@ -69,6 +69,8 @@ export interface Room {
   loopCount?: number;
   balanceSlider: number; // 0 = realistic debate, 100 = equal participation
   documents: RoomDocument[];
+  meetings: MeetingSession[];
+  activeMeetingId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,6 +110,30 @@ export interface ProviderConfig {
   apiKey: string;
   baseUrl?: string;
   isActive: boolean;
+}
+
+export type MeetingStatus = 'scheduled' | 'active' | 'wrap-up' | 'ended';
+
+export interface MeetingSession {
+  id: string;
+  roomId: string;
+  topic: string;
+  goals: string;
+  additionalInfo: string;
+  documents: RoomDocument[];
+  startTime: string; // ISO
+  durationMinutes: number;
+  status: MeetingStatus;
+  createdAt: string;
+}
+
+export interface MeetingContext {
+  topic: string;
+  goals: string;
+  additionalInfo: string;
+  timeRemainingMinutes: number;
+  totalDurationMinutes: number;
+  phase: 'active' | 'wrap-up';
 }
 
 export type SummarizerAction = 'summarize' | 'decisions' | 'actionPlan' | 'updateMemory';
