@@ -14,6 +14,9 @@ interface LLMResponse {
   provider: string;
 }
 
+const backendApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const isBackendModeEnabled = backendApiBaseUrl.length > 0;
+
 function findProvider(providerType: string, baseUrl?: string): ProviderConfig | null {
   const providers = getProviders();
   // Try exact match with baseUrl first
@@ -270,6 +273,46 @@ async function callLovableAI(
   };
 }
 
+async function callBackendLLM(
+  agent: Agent,
+  system: string,
+  history: { role: string; content: string }[],
+): Promise<{ content: string; tokensUsed?: number }> {
+  const res = await fetch(`${backendApiBaseUrl}/api/llm/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      agent: {
+        provider: agent.config.provider,
+        model: agent.config.model,
+        baseUrl: agent.config.baseUrl,
+        config: {
+          temperature: agent.config.temperature,
+          topP: agent.config.topP,
+          maxTokens: agent.config.maxTokens,
+          presencePenalty: agent.config.presencePenalty,
+          frequencyPenalty: agent.config.frequencyPenalty,
+        },
+      },
+      model: agent.config.model,
+      prompt: history[history.length - 1]?.content || '',
+      system,
+      history,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Backend LLM error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  return {
+    content: data.content || 'No response',
+    tokensUsed: data.usage?.total_tokens,
+  };
+}
+
 // ---- Main entry point ----
 
 export interface ResearchLoopDetail {
@@ -296,8 +339,12 @@ export async function callAgent(
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
+  <<<<<<< codex/add-backend-inference-endpoint-for-chat
+  if (agent.config.provider !== 'lovable' && !isBackendModeEnabled) {
+=======
   await waitForProviderHydration();
   if (agent.config.provider !== 'lovable') {
+    >>>>>>> codex/create-prs-for-multiple-issues
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
     if (!provider) {
       throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
@@ -586,6 +633,11 @@ async function callProviderRaw(
 
   const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
 
+  if (isBackendModeEnabled && agent.config.provider !== 'lovable') {
+    const result = await callBackendLLM(agent, system, history);
+    return { content: result.content, tokensUsed: result.tokensUsed };
+  }
+
   switch (agent.config.provider) {
     case 'lovable': {
       const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
@@ -649,7 +701,7 @@ export async function callSummarizer(
   const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
   const providers = getProviders().filter(p => p.isActive);
 
-  if (!hasLovableCloud && providers.length === 0) {
+  if (!hasLovableCloud && !isBackendModeEnabled && providers.length === 0) {
     throw new Error('No active providers configured. Go to Providers to add an API key.');
   }
 
@@ -689,6 +741,24 @@ export async function callSummarizer(
     content = result.content;
     usedModel = 'google/gemini-3-flash-preview';
     usedProvider = 'lovable';
+  } else if (isBackendModeEnabled) {
+    const backendProvider = providers[0]?.provider || 'openai';
+    const tempAgent = {
+      config: {
+        provider: backendProvider,
+        model: 'gpt-4o-mini',
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+
+    const result = await callBackendLLM(tempAgent, system, history);
+    content = result.content;
+    usedModel = tempAgent.config.model;
+    usedProvider = tempAgent.config.provider;
   } else {
     const provider = providers[0];
     const tempAgent = {
