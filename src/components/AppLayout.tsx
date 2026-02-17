@@ -11,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { capabilities, capabilityLabel } from '@/lib/capabilities';
+import { TID } from '@/testIds';
 
 interface LayoutContextType {
   sidebarOpen: boolean;
@@ -21,11 +22,11 @@ const LayoutContext = createContext<LayoutContextType>({ sidebarOpen: false, set
 export const useLayout = () => useContext(LayoutContext);
 
 const navItems = [
-  { label: 'Rooms', path: '/', icon: LayoutDashboard },
-  { label: 'Agents', path: '/agents', icon: Users },
-  { label: 'Skills', path: '/skills', icon: Puzzle },
-  { label: 'Providers', path: '/providers', icon: Key },
-  { label: 'Settings', path: '/settings', icon: Settings },
+  { label: 'Rooms', path: '/', icon: LayoutDashboard, testId: TID.navDashboard },
+  { label: 'Agents', path: '/agents', icon: Users, testId: TID.navAgents },
+  { label: 'Skills', path: '/skills', icon: Puzzle, testId: TID.navSkills },
+  { label: 'Providers', path: '/providers', icon: Key, testId: TID.navProviders },
+  { label: 'Settings', path: '/settings', icon: Settings, testId: TID.navSettings },
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -76,6 +77,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                   navigate(item.path);
                   setSidebarOpen(false);
                 }}
+                data-testid={item.testId}
                 className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   isActive(item.path)
                     ? 'bg-primary text-primary-foreground'

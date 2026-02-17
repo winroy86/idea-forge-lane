@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const AI_BASE_URL = Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1";
+const CODE_EXECUTION_MODE = Deno.env.get("CODE_EXECUTION_MODE") || "sandbox-http";
+const SANDBOX_EXECUTOR_URL = Deno.env.get("SANDBOX_EXECUTOR_URL") || "http://localhost:8787/execute";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -258,32 +260,31 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
   return { result: data.choices?.[0]?.message?.content || searchContext, sources };
 }
 
-// Execute JavaScript code safely
-function executeCode(code: string): string {
+// Execute JavaScript code using an isolated local sandbox service
+async function executeCode(code: string): Promise<string> {
+  if (CODE_EXECUTION_MODE !== "sandbox-http") {
+    return "Code execution is disabled. Set CODE_EXECUTION_MODE=sandbox-http and configure SANDBOX_EXECUTOR_URL.";
+  }
+
   try {
-    // Create a sandboxed function with limited globals
-    const logs: string[] = [];
-    const mockConsole = {
-      log: (...args: unknown[]) => logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-      error: (...args: unknown[]) => logs.push('ERROR: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-      warn: (...args: unknown[]) => logs.push('WARN: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-    };
+    const res = await fetch(SANDBOX_EXECUTOR_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, language: "javascript", timeoutMs: 10000 }),
+    });
 
-    const fn = new Function('console', 'Math', 'Date', 'JSON', 'Array', 'Object', 'String', 'Number', 'Boolean', 'RegExp', 'Map', 'Set', `
-      "use strict";
-      ${code}
-    `);
-
-    const result = fn(mockConsole, Math, Date, JSON, Array, Object, String, Number, Boolean, RegExp, Map, Set);
-    
-    const output = logs.length > 0 ? logs.join('\n') : '';
-    if (result !== undefined) {
-      const resultStr = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
-      return output ? `${output}\n→ ${resultStr}` : `→ ${resultStr}`;
+    if (!res.ok) {
+      const text = await res.text();
+      return `Sandbox executor error (${res.status}): ${text}`;
     }
-    return output || '(no output)';
+
+    const data = await res.json();
+    if (typeof data?.stdout === "string" && data.stdout.trim()) return data.stdout;
+    if (typeof data?.result === "string" && data.result.trim()) return data.result;
+    if (data?.result !== undefined) return String(data.result);
+    return "(no output)";
   } catch (err) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    return `Sandbox execution failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -591,7 +592,7 @@ serve(async (req) => {
         } else if (fnName === "code_execution") {
           const code = args.code || "";
           console.log(`💻 Agent executing code (${(args.language || 'js')}): ${code.slice(0, 100)}...`);
-          toolResult = executeCode(code);
+          toolResult = await executeCode(code);
           toolCallsMade.push({ tool: "code_execution", query: code.slice(0, 200), result: toolResult, sources: [] });
         } else if (fnName === "mcp_call") {
           const serverUrl = args.server_url || "";

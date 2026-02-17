@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { TID } from '@/testIds';
 
 const PROVIDERS: { value: LLMProvider; label: string; hint: string }[] = [
   { value: 'openai', label: 'OpenAI', hint: 'sk-...' },
@@ -91,7 +92,7 @@ export default function ProvidersPage() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-1.5"><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
+            <Button size="sm" className="gap-1.5" data-testid={TID.providerAddBtn}><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Add Provider</DialogTitle></DialogHeader>
@@ -99,7 +100,7 @@ export default function ProvidersPage() {
               <div>
                 <Label>Provider</Label>
                 <Select value={newProvider} onValueChange={v => setNewProvider(v as LLMProvider)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid={TID.providerTypeSelect}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
                   </SelectContent>
@@ -108,18 +109,18 @@ export default function ProvidersPage() {
               <>
                 <div>
                   <Label>Label (optional)</Label>
-                  <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" />
+                  <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" data-testid={TID.providerNameInput} />
                 </div>
                 <div>
                   <Label>API Key</Label>
-                  <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} />
+                  <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} data-testid={TID.providerApiKeyInput} />
                 </div>
               </>
               {(newProvider === 'custom' || newProvider === 'ollama' || newProvider === 'azure') && (
                 <div>
                   <Label>Base URL</Label>
                   <div className="flex gap-2">
-                    <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434" />
+                    <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434" data-testid={TID.providerBaseUrlInput} />
                     {newProvider === 'ollama' && (
                       <Button variant="outline" size="icon" onClick={() => detectOllama()} disabled={ollamaDetecting}>
                         {ollamaDetecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -157,7 +158,7 @@ export default function ProvidersPage() {
                   )}
                 </div>
               )}
-              <Button onClick={handleCreate} className="w-full">Save Provider</Button>
+              <Button onClick={handleCreate} className="w-full" data-testid={TID.providerSaveBtn}>Save Provider</Button>
             </div>
           </DialogContent>
         </Dialog>

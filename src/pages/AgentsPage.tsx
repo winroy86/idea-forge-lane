@@ -28,6 +28,7 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
+import { TID } from '@/testIds';
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
@@ -149,7 +150,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Name</Label>
-            <Input value={form.name} onChange={e => update({ name: e.target.value })} placeholder="Dr. Strategy" />
+            <Input value={form.name} onChange={e => update({ name: e.target.value })} placeholder="Dr. Strategy" data-testid={TID.agentNameInput} />
           </div>
           <div>
             <Label>Role</Label>
@@ -168,7 +169,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
         </div>
         <div>
           <Label>System Prompt</Label>
-          <Textarea value={form.systemPrompt} onChange={e => update({ systemPrompt: e.target.value })} rows={4} placeholder="You are a strategic advisor who..." />
+          <Textarea value={form.systemPrompt} onChange={e => update({ systemPrompt: e.target.value })} rows={4} placeholder="You are a strategic advisor who..." data-testid={TID.agentSystemPrompt} />
         </div>
         <div>
           <Label>Style / Voice</Label>
@@ -182,7 +183,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
             <div>
               <Label>Provider</Label>
               <Select value={form.config.provider} onValueChange={v => handleProviderChange(v as LLMProvider)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger data-testid={TID.agentProviderSelect}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
                 </SelectContent>
@@ -192,7 +193,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
               <Label>Model</Label>
               {form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
                 <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
-                  <SelectTrigger>
+                  <SelectTrigger data-testid={TID.agentModelSelect}>
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -206,7 +207,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                   <Loader2 className="h-3 w-3 animate-spin" /> Detecting models...
                 </div>
               ) : (
-                <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="gpt-4" />
+                <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="gpt-4" data-testid={TID.agentModelSelect} />
               )}
             </div>
           </div>
@@ -253,6 +254,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                     <Label className="text-xs capitalize">{perm.replace(/([A-Z])/g, ' $1')}</Label>
                     <Switch
                       checked={form.permissions[perm]}
+                      data-testid={perm === 'webSearch' ? TID.agentToolWebToggle : perm === 'codeExecution' ? TID.agentToolCodeToggle : perm === 'fileRead' ? 'agent-tool-fileread' : 'agent-tool-filewrite'}
                       onCheckedChange={v => update({ permissions: { ...form.permissions, [perm]: v } })}
                     />
                   </div>
@@ -795,7 +797,7 @@ export default function AgentsPage() {
           <Button variant="outline" size="sm" onClick={() => setShowGenerator(true)} className="gap-1.5 border-accent/40 text-accent hover:bg-accent/10">
             <Sparkles className="h-3.5 w-3.5" /> Auto Generate
           </Button>
-          <Button size="sm" onClick={() => setEditAgent(null)} className="gap-1.5">
+          <Button size="sm" onClick={() => setEditAgent(null)} className="gap-1.5" data-testid={TID.agentCreateBtn}>
             <Plus className="h-3.5 w-3.5" /> New Agent
           </Button>
         </div>
@@ -808,14 +810,14 @@ export default function AgentsPage() {
           </div>
           <h2 className="text-lg font-medium text-foreground mb-1">No agents yet</h2>
           <p className="text-sm text-muted-foreground mb-6">Create your first agent persona to get started.</p>
-          <Button onClick={() => setEditAgent(null)}>Create Agent</Button>
+          <Button onClick={() => setEditAgent(null)} data-testid={TID.agentCreateBtn}>Create Agent</Button>
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {agents.map((agent) => (
             <div key={agent.id} className="group rounded-lg border border-border bg-card p-4 shadow-soft">
               <div className="flex items-start gap-3">
-                <div className={`h-8 w-8 rounded-full bg-agent-${(agent.colorIndex % 6) + 1} flex items-center justify-center text-sm font-bold text-primary-foreground shrink-0`}>
+                <div className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-bold text-primary-foreground shrink-0" style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>
                   {agent.name[0]}
                 </div>
                 <div className="flex-1 min-w-0">

@@ -76,6 +76,22 @@ The app header includes a **Capabilities** indicator showing which of these are 
 - Memory read/write (short-term + long-term summary): enabled
 - File read/file write: represented in permissions schema; full sandboxed local filesystem tooling is not yet implemented in this frontend runtime
 
+
+### Local code execution sandbox (for agent code tool)
+
+To let agents run code safely without `new Function`, start the isolated sandbox service:
+
+```sh
+docker compose -f docker-compose.sandbox.yml up -d --build
+```
+
+Then configure Supabase edge function env:
+
+- `CODE_EXECUTION_MODE=sandbox-http`
+- `SANDBOX_EXECUTOR_URL=http://host.docker.internal:8787/execute` (or LAN/host IP if needed)
+
+The sandbox container installs needed packages during image build (`npm install`) and runs code in an isolated process.
+
 ### Supabase edge function AI env
 For self-hosted usage, edge functions expect:
 - `AI_BASE_URL` (default: `https://api.openai.com/v1`)
