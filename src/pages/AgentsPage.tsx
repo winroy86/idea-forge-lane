@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
+import { getSkills } from '@/lib/skillStore';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -470,6 +471,50 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                 </div>
               </div>
             </div>
+
+            {/* Skills Assignment */}
+            <div className="border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Puzzle className="h-3 w-3" /> Skills
+              </p>
+              <p className="text-[10px] text-muted-foreground mb-2">Assign workflow skills to this agent</p>
+              {(() => {
+                const allSkills = getSkills();
+                if (allSkills.length === 0) return (
+                  <p className="text-[10px] text-muted-foreground italic">No skills installed. Go to Skills page to add some.</p>
+                );
+                return (
+                  <div className="space-y-1.5">
+                    {allSkills.map(skill => {
+                      const isAssigned = (form.skills || []).includes(skill.id);
+                      const missingPerms = skill.requiredPermissions.filter(p => !form.permissions[p]);
+                      return (
+                        <label key={skill.id} className="flex items-center gap-2 rounded p-1.5 hover:bg-muted/30 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isAssigned}
+                            onChange={e => {
+                              const skills = e.target.checked
+                                ? [...(form.skills || []), skill.id]
+                                : (form.skills || []).filter(s => s !== skill.id);
+                              update({ skills });
+                            }}
+                            className="rounded border-border"
+                          />
+                          <span className="text-sm">{skill.icon}</span>
+                          <span className="text-xs text-foreground flex-1">{skill.name}</span>
+                          {missingPerms.length > 0 && (
+                            <span className="text-[9px] text-amber-400" title={`Missing: ${missingPerms.join(', ')}`}>
+                              ⚠️ needs {missingPerms.join(', ')}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         )}
 
@@ -790,6 +835,11 @@ export default function AgentsPage() {
                 {(agent.mcpServers?.filter(s => s.enabled).length || 0) > 0 && (
                   <span className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
                     <Plug className="h-2.5 w-2.5" /> MCP ({agent.mcpServers.filter(s => s.enabled).length})
+                  </span>
+                )}
+                {(agent.skills?.length || 0) > 0 && (
+                  <span className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                    <Puzzle className="h-2.5 w-2.5" /> {agent.skills.length} skill{agent.skills.length > 1 ? 's' : ''}
                   </span>
                 )}
                 {agent.memoryEnabled && (() => {
