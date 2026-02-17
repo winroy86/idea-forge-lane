@@ -43,8 +43,8 @@ fi
 
 # Warning-only check: backend mode should not depend on client-side provider secrets
 if [[ -f "$llm_file" ]]; then
-  if rg -q 'getProviders\(' "$llm_file" && rg -q 'provider\.apiKey|apiKey' "$llm_file"; then
-    WARNINGS+=("src/lib/llm.ts still appears to depend on client-stored provider secrets (getProviders/apiKey). In backend mode, move secret resolution server-side.")
+  if ! rg -q "isBackendModeEnabled && agent.config.provider !== 'lovable'" "$llm_file"; then
+    WARNINGS+=("src/lib/llm.ts may bypass backend inference mode for non-Lovable providers. Verify backend secret resolution path is enforced when VITE_API_BASE_URL is set.")
   fi
 else
   WARNINGS+=("src/lib/llm.ts not found; could not evaluate client-stored secret dependency warning.")

@@ -4,6 +4,7 @@ import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId, getLocalDevMode, setLocalDevMode } from '@/lib/store';
 import { supabase } from '@/integrations/supabase/client';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
+import { isBackendStorageEnabled, fetchBackendProviders, saveBackendProvider } from '@/lib/storageAdapter';
 import { Button } from '@/components/ui/button';
 import { testIds } from '@/testIds';
 import { Input } from '@/components/ui/input';
@@ -57,6 +58,19 @@ export default function ProvidersPage() {
   };
 
   const loadRemoteProviders = async () => {
+    if (isBackendStorageEnabled()) {
+      try {
+        const backendProviders = await fetchBackendProviders();
+        if (backendProviders.length > 0) {
+          setProviders(backendProviders);
+          backendProviders.forEach((p: ProviderConfig) => upsertProvider(p));
+          return;
+        }
+      } catch (error) {
+        console.warn('Failed to load providers from backend API:', error);
+      }
+    }
+
     const supabaseUrl = getEdgeBase();
     if (!supabaseUrl) return;
     const token = await getAuthToken();
@@ -108,6 +122,10 @@ const detectOllama = async (url?: string) => {
       isActive: true,
     };
     if (!localDevMode && newProvider !== "lovable") {
+      if (isBackendStorageEnabled()) {
+        await saveBackendProvider(p);
+      }
+
       const supabaseUrl = getEdgeBase();
       const token = await getAuthToken();
       if (supabaseUrl && token) {
