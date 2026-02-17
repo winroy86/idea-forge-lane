@@ -11,12 +11,17 @@ export interface AgentConfig {
   frequencyPenalty: number;
 }
 
+export type McpAuthType = 'none' | 'bearer' | 'api-key';
+
 export interface McpServerConfig {
   id: string;
   name: string;
   url: string;
   tools: string[]; // discovered tool names
   enabled: boolean;
+  authType: McpAuthType;
+  authToken?: string; // bearer token or API key value
+  authHeader?: string; // custom header name for api-key auth (default: 'Authorization')
 }
 
 export interface Agent {
