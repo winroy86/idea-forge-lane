@@ -73,6 +73,27 @@ npm run smoke:prod
 
 This runs a production build and starts Vite preview.
 
+## Readiness check
+
+Run the readiness script to quickly verify backend/provider integration status:
+
+```sh
+./scripts/readiness-check.sh
+```
+
+The output is intentionally split into:
+
+- **Foundation present**: baseline capabilities detected.
+- **Production-hardening pending**: missing pieces that should be resolved before production.
+- **Warnings**: risk indicators that do not fail the check but can still cause insecure or fragile behavior.
+
+Current checks include:
+
+- Presence of `/api/providers` route in `server/index.js`.
+- Encryption helper usage and encrypted provider key field checks (`encryptText`, `decryptText`, `api_key_encrypted`) in `server/index.js`.
+- Frontend provider backend sync hook presence in `src/lib/storageAdapter.ts`.
+- Warning when `src/lib/llm.ts` appears to still depend on client-stored provider secrets in backend mode.
+
 **Edit a file directly in GitHub**
 
 - Navigate to the desired file(s).
