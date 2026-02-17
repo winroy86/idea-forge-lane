@@ -1,5 +1,7 @@
 import { Agent, Room, Message, ProviderConfig, MeetingSession, AppSettings } from '@/types';
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
 function load<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -11,6 +13,24 @@ function load<T>(key: string, fallback: T): T {
 
 function save<T>(key: string, data: T) {
   localStorage.setItem(key, JSON.stringify(data));
+}
+
+
+
+async function serverFetch(path: string, init?: RequestInit) {
+  if (!API_BASE_URL) return;
+  try {
+    await fetch(`${API_BASE_URL}${path}`, {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers || {}),
+      },
+      ...init,
+    });
+  } catch {
+    // local fallback mode
+  }
 }
 
 const KEYS = {
@@ -30,8 +50,12 @@ export const upsertRoom = (room: Room) => {
   const rooms = getRooms().filter(r => r.id !== room.id);
   rooms.push(room);
   saveRooms(rooms);
+  void serverFetch(`/api/rooms`, { method: "POST", body: JSON.stringify(room) });
 };
-export const deleteRoom = (id: string) => saveRooms(getRooms().filter(r => r.id !== id));
+export const deleteRoom = (id: string) => {
+  saveRooms(getRooms().filter(r => r.id !== id));
+  void serverFetch(`/api/rooms/${id}`, { method: 'DELETE' });
+};
 
 // Agents
 export const getAgents = (): Agent[] => load(KEYS.agents, []);

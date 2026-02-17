@@ -61,11 +61,99 @@ function getWeather(city: string): string {
   return `Weather in ${city}: ${w.temp}°C, ${w.condition}, Humidity: ${w.humidity}%`;
 }
 
+function tokenizeMath(expression: string): string[] {
+  const sanitized = expression.replace(/\^/g, '**').replace(/\s+/g, '');
+  if (!/^[0-9+\-*/().%]*$/.test(sanitized)) return [];
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < sanitized.length) {
+    const ch = sanitized[i];
+    if (!ch) break;
+    if ('+-*/()%'.includes(ch)) {
+      tokens.push(ch);
+      i += 1;
+      continue;
+    }
+    if (ch === '*') {
+      if (sanitized[i + 1] === '*') {
+        tokens.push('**');
+        i += 2;
+        continue;
+      }
+      tokens.push('*');
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < sanitized.length && /[0-9.]/.test(sanitized[j] || '')) j += 1;
+    tokens.push(sanitized.slice(i, j));
+    i = j;
+  }
+  return tokens;
+}
+
+function evaluateMath(expression: string): number {
+  const tokens = tokenizeMath(expression);
+  if (tokens.length === 0) throw new Error('Invalid expression');
+
+  const output: (number | string)[] = [];
+  const ops: string[] = [];
+  const prec: Record<string, number> = { '+': 1, '-': 1, '*': 2, '/': 2, '%': 2, '**': 3 };
+  const rightAssoc = new Set(['**']);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i] || '';
+    if (/^\d+(\.\d+)?$/.test(t)) {
+      output.push(Number(t));
+      continue;
+    }
+    if (t === '(') { ops.push(t); continue; }
+    if (t === ')') {
+      while (ops.length && ops[ops.length - 1] !== '(') output.push(ops.pop() as string);
+      if (ops[ops.length - 1] === '(') ops.pop();
+      continue;
+    }
+    const isUnaryMinus = t === '-' && (i === 0 || ['(', '+', '-', '*', '/', '%', '**'].includes(tokens[i - 1] || ''));
+    if (isUnaryMinus) {
+      output.push(0);
+    }
+    while (ops.length) {
+      const top = ops[ops.length - 1] || '';
+      if (top === '(') break;
+      const shouldPop = rightAssoc.has(t) ? prec[t] < prec[top] : prec[t] <= prec[top];
+      if (!shouldPop) break;
+      output.push(ops.pop() as string);
+    }
+    ops.push(t);
+  }
+  while (ops.length) output.push(ops.pop() as string);
+
+  const stack: number[] = [];
+  for (const item of output) {
+    if (typeof item === 'number') {
+      stack.push(item);
+      continue;
+    }
+    const b = stack.pop();
+    const a = stack.pop();
+    if (a === undefined || b === undefined) throw new Error('Invalid expression');
+    switch (item) {
+      case '+': stack.push(a + b); break;
+      case '-': stack.push(a - b); break;
+      case '*': stack.push(a * b); break;
+      case '/': stack.push(a / b); break;
+      case '%': stack.push(a % b); break;
+      case '**': stack.push(a ** b); break;
+      default: throw new Error('Invalid operator');
+    }
+  }
+  if (stack.length !== 1) throw new Error('Invalid expression');
+  return stack[0] || 0;
+}
+
 function calculate(expression: string): string {
   try {
-    // Safe math evaluation
-    const sanitized = expression.replace(/[^0-9+\-*/().%\s^]/g, '');
-    const result = new Function(`return (${sanitized.replace(/\^/g, '**')})`)();
+    const result = evaluateMath(expression);
     return `${expression} = ${result}`;
   } catch {
     return `Could not evaluate: ${expression}`;

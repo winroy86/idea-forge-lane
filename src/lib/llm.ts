@@ -150,7 +150,7 @@ async function callOpenAICompatible(
   history: { role: string; content: string }[],
   agent: Agent,
 ): Promise<{ content: string; usage?: { total_tokens?: number } }> {
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const url = buildOpenAICompatibleUrl(baseUrl);
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -174,6 +174,52 @@ async function callOpenAICompatible(
     const err = await res.text();
     throw new Error(`API error (${res.status}): ${err}`);
   }
+  const data = await res.json();
+  return {
+    content: data.choices?.[0]?.message?.content || 'No response',
+    usage: data.usage,
+  };
+}
+
+
+async function callAzureOpenAI(
+  apiKey: string,
+  baseUrl: string,
+  deployment: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+): Promise<{ content: string; usage?: { total_tokens?: number } }> {
+  const trimmed = baseUrl.replace(/\/$/, '');
+  const apiVersion = '2024-10-21';
+  const endpoint = trimmed.includes('/openai/deployments/')
+    ? `${trimmed}/chat/completions?api-version=${apiVersion}`
+    : `${trimmed}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify({
+      messages: [
+        { role: 'system', content: system },
+        ...history,
+      ],
+      temperature: agent.config.temperature,
+      max_tokens: agent.config.maxTokens,
+      top_p: agent.config.topP,
+      presence_penalty: agent.config.presencePenalty,
+      frequency_penalty: agent.config.frequencyPenalty,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Azure OpenAI error (${res.status}): ${err}`);
+  }
+
   const data = await res.json();
   return {
     content: data.choices?.[0]?.message?.content || 'No response',
@@ -402,7 +448,6 @@ export async function callAgent(
 ): Promise<LLMResponse> {
   <<<<<<< codex/add-backend-inference-endpoint-for-chat
   if (agent.config.provider !== 'lovable' && !isBackendModeEnabled) {
-=======
   await waitForProviderHydration();
   if (agent.config.provider !== 'lovable') {
     >>>>>>> codex/create-prs-for-multiple-issues
@@ -422,6 +467,12 @@ export async function callAgent(
   }
   if (agent.permissions?.codeExecution) {
     toolsEnabled.push('code_execution');
+  }
+  if (agent.permissions?.fileRead) {
+    toolsEnabled.push('file_read');
+  }
+  if (agent.permissions?.fileWrite) {
+    toolsEnabled.push('file_write');
   }
   const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
   if (mcpServers.length > 0) {
@@ -574,6 +625,8 @@ Be honest and analytical in your thinking. This is your private space.`;
   const toolDescriptions: string[] = [];
   if (toolsEnabled.includes('web_search')) toolDescriptions.push('- web_search: Search the internet for current information.');
   if (toolsEnabled.includes('code_execution')) toolDescriptions.push('- code_execution: Execute JavaScript code for calculations and data processing. When you use code execution, include the code and results in your response using markdown code blocks so the group can see your work.');
+  if (toolsEnabled.includes('file_read')) toolDescriptions.push('- file_read: Read files from the local agent workspace path.');
+  if (toolsEnabled.includes('file_write')) toolDescriptions.push('- file_write: Write files to the local agent workspace path.');
   if (toolsEnabled.includes('mcp_call')) {
     const mcpNames = (agent.mcpServers || []).filter(s => s.enabled).map(s => `${s.name} (${s.tools.join(', ') || 'generic'})`);
     toolDescriptions.push(`- MCP tools: ${mcpNames.join('; ')}`);
@@ -698,13 +751,6 @@ async function callProviderRaw(
   }
 
   switch (agent.config.provider) {
-    case 'lovable': {
-      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
-      content = result.content;
-      tokensUsed = result.usage?.total_tokens;
-      toolCallsMade = result.toolCallsMade;
-      break;
-    }
     case 'anthropic': {
       const provider = findProvider('anthropic')!;
       const result = await callAnthropic(provider.apiKey || '', agent.config.model, system, history, agent);
@@ -723,8 +769,6 @@ async function callProviderRaw(
       const baseUrl =
         agent.config.provider === 'ollama'
           ? (provider.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
-          : agent.config.provider === 'azure'
-          ? (provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT')
           : agent.config.provider === 'custom'
           ? (provider.baseUrl || agent.config.baseUrl || '')
           : 'https://api.openai.com/v1';

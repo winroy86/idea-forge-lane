@@ -179,20 +179,26 @@ export default function RoomView() {
 
   useEffect(() => {
     if (!id) return;
-    const r = getRoom(id);
-    if (!r) { navigate('/'); return; }
-    // Migrate old rooms
-    if (!r.documents) r.documents = [];
-    if (!r.meetings) r.meetings = [];
-    setRoom(r);
-    setAllAgents(getAgents());
-    setMessages(getMessages(id));
-    // Restore active meeting
-    const active = getActiveMeeting(id);
-    if (active && (active.status === 'active' || active.status === 'wrap-up')) {
-      setActiveMeeting(active);
-      wrapUpTriggeredRef.current = active.status === 'wrap-up';
-    }
+
+    const loadRoom = async () => {
+      await hydrateRoomsFromServer();
+      const r = getRoom(id);
+      if (!r) { navigate('/'); return; }
+      // Migrate old rooms
+      if (!r.documents) r.documents = [];
+      if (!r.meetings) r.meetings = [];
+      setRoom(r);
+      setAllAgents(getAgents());
+      setMessages(getMessages(id));
+      // Restore active meeting
+      const active = getActiveMeeting(id);
+      if (active && (active.status === 'active' || active.status === 'wrap-up')) {
+        setActiveMeeting(active);
+        wrapUpTriggeredRef.current = active.status === 'wrap-up';
+      }
+    };
+
+    void loadRoom();
   }, [id, navigate]);
 
   // Keep messagesRef in sync
@@ -788,7 +794,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                       <p className="text-xs text-muted-foreground mb-1">📄 {documents.length} document{documents.length > 1 ? 's' : ''} will be shared with agents</p>
                     </div>
                   )}
-                  <Button onClick={startMeeting} className="w-full gap-2" disabled={!meetingTopic.trim()}>
+                  <Button onClick={startMeeting} className="w-full gap-2" disabled={!meetingTopic.trim()} data-testid={TID.meetingStartBtn}>
                     <Play className="h-3.5 w-3.5" /> Start Meeting Now
                   </Button>
                 </div>
@@ -914,7 +920,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                 >
                   {agent && (
                     <div className="flex items-center gap-2 mb-1.5">
-                      <div className={`h-5 w-5 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[10px] font-bold text-primary-foreground`}>
+                      <div className="h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground" style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>
                         {agent.name[0]}
                       </div>
                       <span className="font-semibold text-xs" style={{ color: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>{agent.name}</span>
@@ -1045,6 +1051,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
         <div className="border-t border-border p-3 bg-card">
           <div className="flex gap-2">
             <input
+              data-testid={TID.docUploadInput}
               ref={fileInputRef}
               type="file"
               accept=".txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java,.go,.rs,.c,.cpp,.h,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql,.pdf,.docx,.doc,.pptx,.xlsx,.png,.jpg,.jpeg,.webp"
@@ -1062,13 +1069,14 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
               <Paperclip className="h-4 w-4" />
             </Button>
             <Input
+              data-testid={TID.chatInput}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendUserMessage()}
               placeholder="Type a message to steer the conversation..."
               className="flex-1"
             />
-            <Button onClick={sendUserMessage} size="icon" disabled={!input.trim()}>
+            <Button onClick={sendUserMessage} size="icon" disabled={!input.trim()} data-testid={TID.chatSendBtn}>
               <Send className="h-4 w-4" />
             </Button>
           </div>
@@ -1088,7 +1096,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
           {roomAgents.map((agent) => (
             <div key={agent.id} className="rounded-md border border-border p-2.5 group">
               <div className="flex items-center gap-2">
-                <div className={`h-6 w-6 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[11px] font-bold text-primary-foreground`}>
+                <div className="h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-bold text-primary-foreground" style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>
                   {agent.name[0]}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -1211,6 +1219,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                 ))}
                 <button
                   onClick={() => navigate(`/room/${room.id}/history`)}
+                    data-testid={TID.historyTabBtn}
                   className="w-full text-center text-[10px] text-accent hover:underline mt-1"
                 >
                   View Full History →

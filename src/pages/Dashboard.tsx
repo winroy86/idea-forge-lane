@@ -15,6 +15,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { TID } from '@/testIds';
+import { hydrateRoomsFromServer } from '@/lib/storageAdapter';
 
 function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
   // ... keep existing code (CreateRoomDialog component)
@@ -49,7 +51,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="gap-2">
+        <Button className="gap-2" data-testid={TID.roomCreateBtn}>
           <Plus className="h-4 w-4" />
           New Room
         </Button>
@@ -63,7 +65,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
           <div>
             <Label htmlFor="room-title">Title</Label>
             <Input
-              id="room-title"
+              id="room-title" data-testid={TID.roomNameInput}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Product Strategy Q3"
@@ -79,7 +81,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
               rows={3}
             />
           </div>
-          <Button onClick={handleCreate} className="w-full" disabled={!title.trim()}>
+          <Button onClick={handleCreate} className="w-full" disabled={!title.trim()} data-testid={TID.roomCreateConfirm}>
             Create Room
           </Button>
         </div>
@@ -161,7 +163,11 @@ export default function Dashboard() {
     setRooms(getRooms().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
     setMeetings(getAllMeetings());
   };
-  useEffect(refresh, []);
+
+  useEffect(() => {
+    refresh();
+    void hydrateRoomsFromServer().then(() => refresh());
+  }, []);
 
   return (
     <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
@@ -193,6 +199,7 @@ export default function Dashboard() {
                 key={room.id}
                 onClick={() => navigate(`/room/${room.id}`)}
                 className="group cursor-pointer rounded-lg border border-border bg-card p-4 shadow-soft transition-all hover:shadow-elevated hover:border-accent/40"
+                data-testid={TID.roomCard(room.id)}
               >
                 <div className="flex items-start justify-between">
                   <h3 className="font-medium text-foreground group-hover:text-accent transition-colors">

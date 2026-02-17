@@ -215,7 +215,7 @@ function MeetingCard({ entry, allAgents }: { entry: MeetingTimelineEntry; allAge
               <div className="flex flex-wrap gap-2">
                 {Array.from(contributions.values()).sort((a, b) => b.count - a.count).map(({ agent, count }) => (
                   <div key={agent.id} className="flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1">
-                    <div className={`h-4 w-4 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[8px] font-bold text-primary-foreground`}>
+                    <div className="h-4 w-4 rounded-full flex items-center justify-center text-[8px] font-bold text-primary-foreground" style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>
                       {agent.name[0]}
                     </div>
                     <span className="text-[11px] font-medium text-foreground">{agent.name}</span>
@@ -236,7 +236,7 @@ function MeetingCard({ entry, allAgents }: { entry: MeetingTimelineEntry; allAge
                     return (
                       <div key={msg.id} className="rounded-md border border-border bg-muted/20 p-3">
                         <div className="flex items-center gap-2 mb-1.5">
-                          <div className={`h-5 w-5 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[10px] font-bold text-primary-foreground`}>
+                          <div className="h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground" style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>
                             {agent.name[0]}
                           </div>
                           <span className="text-xs font-medium text-foreground">{agent.name}</span>

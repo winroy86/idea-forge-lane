@@ -23,16 +23,17 @@ const LayoutContext = createContext<LayoutContextType>({ sidebarOpen: false, set
 export const useLayout = () => useContext(LayoutContext);
 
 const navItems = [
-  { label: 'Rooms', path: '/', icon: LayoutDashboard },
-  { label: 'Agents', path: '/agents', icon: Users },
-  { label: 'Skills', path: '/skills', icon: Puzzle },
-  { label: 'Providers', path: '/providers', icon: Key },
-  { label: 'Settings', path: '/settings', icon: Settings },
+  { label: 'Rooms', path: '/', icon: LayoutDashboard, testId: TID.navDashboard },
+  { label: 'Agents', path: '/agents', icon: Users, testId: TID.navAgents },
+  { label: 'Skills', path: '/skills', icon: Puzzle, testId: TID.navSkills },
+  { label: 'Providers', path: '/providers', icon: Key, testId: TID.navProviders },
+  { label: 'Settings', path: '/settings', icon: Settings, testId: TID.navSettings },
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const { authEnabled, authenticated, logout } = useAuth();
   const location = useLocation();
 
   const session = getSession();
@@ -80,6 +81,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                   navigate(item.path);
                   setSidebarOpen(false);
                 }}
+                data-testid={item.testId}
                 className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   isActive(item.path)
                     ? 'bg-primary text-primary-foreground'
@@ -133,6 +135,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <span className={capabilities.documentExtraction ? 'text-emerald-500' : 'text-amber-500'}>
                 Doc extraction {capabilityLabel(capabilities.documentExtraction)}
               </span>
+              {authEnabled && authenticated && (
+                <button
+                  onClick={() => void logout()}
+                  className="ml-2 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  Logout
+                </button>
+              )}
             </div>
           </header>
 

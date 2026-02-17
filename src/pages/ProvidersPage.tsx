@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId, getLocalDevMode, setLocalDevMode } from '@/lib/store';
 import { supabase } from '@/integrations/supabase/client';
@@ -23,9 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { TID } from '@/testIds';
 
 const PROVIDERS: { value: LLMProvider; label: string; hint: string }[] = [
-  { value: 'lovable', label: '⚡ Lovable AI (Built-in)', hint: 'No API key needed' },
   { value: 'openai', label: 'OpenAI', hint: 'sk-...' },
   { value: 'anthropic', label: 'Anthropic', hint: 'sk-ant-...' },
   { value: 'gemini', label: 'Google Gemini', hint: 'AIza...' },
@@ -119,11 +119,12 @@ const detectOllama = async (url?: string) => {
       }
     }
     upsertProvider(p);
+    void syncProviderToServer(p);
     setOpen(false);
     setNewKey('');
     setNewLabel('');
     setNewBaseUrl('');
-    refresh();
+    await refresh();
   };
 
   return (
@@ -153,10 +154,10 @@ const detectOllama = async (url?: string) => {
                   </SelectContent>
                 </Select>
               </div>
-              {newProvider === 'lovable' ? (
-                <div className="rounded-md border border-accent/20 bg-accent/5 p-3">
-                  <p className="text-xs text-foreground font-medium mb-1">⚡ No API key needed</p>
-                  <p className="text-xs text-muted-foreground">Lovable AI is built-in and ready to use. Just create an agent with "Lovable AI" as the provider and start chatting.</p>
+              <>
+                <div>
+                  <Label>Label (optional)</Label>
+                  <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" data-testid={TID.providerNameInput} />
                 </div>
               ) : (
                 <>
@@ -174,7 +175,7 @@ const detectOllama = async (url?: string) => {
                 <div>
                   <Label>Base URL</Label>
                   <div className="flex gap-2">
-                    <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434" />
+                    <Input value={newBaseUrl} onChange={e => setNewBaseUrl(e.target.value)} placeholder="http://localhost:11434" data-testid={TID.providerBaseUrlInput} />
                     {newProvider === 'ollama' && (
                       <Button variant="outline" size="icon" onClick={() => detectOllama()} disabled={ollamaDetecting}>
                         {ollamaDetecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -234,7 +235,7 @@ const detectOllama = async (url?: string) => {
       <div className="space-y-3" data-testid={testIds.providers.list}>
         {providers.length === 0 && (
           <div className="text-center py-10 text-sm text-muted-foreground">
-            No additional providers configured. You can already use Lovable AI without any keys.
+            No providers configured yet. Add at least one provider to run agents.
           </div>
         )}
         {providers.map(p => (

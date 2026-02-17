@@ -50,6 +50,40 @@ const CODE_EXECUTION_TOOL = {
   },
 };
 
+
+const FILE_READ_TOOL = {
+  type: "function",
+  function: {
+    name: "file_read",
+    description: "Read a UTF-8 text file from the local agent workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative path to file (example: notes/todo.md)" },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const FILE_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: "file_write",
+    description: "Write UTF-8 text content to a file in the local agent workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative path to file (example: notes/todo.md)" },
+        content: { type: "string", description: "Text content to write" },
+      },
+      required: ["path", "content"],
+      additionalProperties: false,
+    },
+  },
+};
+
 const MCP_CALL_TOOL = {
   type: "function",
   function: {
@@ -193,7 +227,7 @@ async function performWebSearch(query: string, apiKey: string, synthesisModel: s
   // If both fail, use the LLM's own knowledge but be honest about it
   if (snippets.length === 0) {
     // Use LLM knowledge but clearly state it's from training data
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const res = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -226,7 +260,7 @@ async function performWebSearch(query: string, apiKey: string, synthesisModel: s
   // Synthesize with LLM
   const searchContext = snippets.join("\n\n");
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch(`${AI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -257,33 +291,57 @@ async function performWebSearch(query: string, apiKey: string, synthesisModel: s
   return { result: data.choices?.[0]?.message?.content || searchContext, sources };
 }
 
-// Execute JavaScript code safely
-function executeCode(code: string): string {
-  try {
-    // Create a sandboxed function with limited globals
-    const logs: string[] = [];
-    const mockConsole = {
-      log: (...args: unknown[]) => logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-      error: (...args: unknown[]) => logs.push('ERROR: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-      warn: (...args: unknown[]) => logs.push('WARN: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-    };
-
-    const fn = new Function('console', 'Math', 'Date', 'JSON', 'Array', 'Object', 'String', 'Number', 'Boolean', 'RegExp', 'Map', 'Set', `
-      "use strict";
-      ${code}
-    `);
-
-    const result = fn(mockConsole, Math, Date, JSON, Array, Object, String, Number, Boolean, RegExp, Map, Set);
-    
-    const output = logs.length > 0 ? logs.join('\n') : '';
-    if (result !== undefined) {
-      const resultStr = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
-      return output ? `${output}\n→ ${resultStr}` : `→ ${resultStr}`;
-    }
-    return output || '(no output)';
-  } catch (err) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+// Execute JavaScript code using an isolated local sandbox service
+async function executeCode(code: string): Promise<string> {
+  if (CODE_EXECUTION_MODE !== "sandbox-http") {
+    return "Code execution is disabled. Set CODE_EXECUTION_MODE=sandbox-http and configure SANDBOX_EXECUTOR_URL.";
   }
+
+  try {
+    const res = await fetch(SANDBOX_EXECUTOR_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, language: "javascript", timeoutMs: 10000 }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return `Sandbox executor error (${res.status}): ${text}`;
+    }
+
+    const data = await res.json();
+    if (typeof data?.stdout === "string" && data.stdout.trim()) return data.stdout;
+    if (typeof data?.result === "string" && data.result.trim()) return data.result;
+    if (data?.result !== undefined) return String(data.result);
+    return "(no output)";
+  } catch (err) {
+    return `Sandbox execution failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+
+function sanitizeRelativePath(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) throw new Error('Invalid path');
+  return normalized;
+}
+
+async function readAgentFile(relPath: string): Promise<string> {
+  const safe = sanitizeRelativePath(relPath);
+  const full = `${AGENT_FILES_ROOT}/${safe}`;
+  const stat = await Deno.stat(full).catch(() => null);
+  if (!stat || !stat.isFile) return `File not found: ${safe}`;
+  const content = await Deno.readTextFile(full);
+  return content;
+}
+
+async function writeAgentFile(relPath: string, content: string): Promise<string> {
+  const safe = sanitizeRelativePath(relPath);
+  const full = `${AGENT_FILES_ROOT}/${safe}`;
+  const dir = full.split('/').slice(0, -1).join('/');
+  await ensureDir(dir);
+  await Deno.writeTextFile(full, content);
+  return `Wrote ${safe} (${content.length} chars)`;
 }
 
 // MCP session cache to avoid re-initializing every call
@@ -502,6 +560,8 @@ serve(async (req) => {
     
     if (enabledSet.has("web_search")) tools.push(WEB_SEARCH_TOOL);
     if (enabledSet.has("code_execution")) tools.push(CODE_EXECUTION_TOOL);
+    if (enabledSet.has("file_read")) tools.push(FILE_READ_TOOL);
+    if (enabledSet.has("file_write")) tools.push(FILE_WRITE_TOOL);
     if (enabledSet.has("mcp_call") && Array.isArray(mcp_servers) && mcp_servers.length > 0) {
       // Add individual MCP tools with server context
       for (const server of mcp_servers) {
@@ -677,8 +737,17 @@ serve(async (req) => {
         } else if (fnName === "code_execution") {
           const code = args.code || "";
           console.log(`💻 Agent executing code (${(args.language || 'js')}): ${code.slice(0, 100)}...`);
-          toolResult = executeCode(code);
+          toolResult = await executeCode(code);
           toolCallsMade.push({ tool: "code_execution", query: code.slice(0, 200), result: toolResult, sources: [] });
+        } else if (fnName === "file_read") {
+          const relPath = String(args.path || "");
+          toolResult = await readAgentFile(relPath);
+          toolCallsMade.push({ tool: "file_read", query: relPath, result: toolResult, sources: [AGENT_FILES_ROOT] });
+        } else if (fnName === "file_write") {
+          const relPath = String(args.path || "");
+          const content = String(args.content || "");
+          toolResult = await writeAgentFile(relPath, content);
+          toolCallsMade.push({ tool: "file_write", query: relPath, result: toolResult, sources: [AGENT_FILES_ROOT] });
         } else if (fnName === "mcp_call") {
           const serverUrl = args.server_url || "";
           const toolName = args.tool_name || "";

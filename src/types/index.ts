@@ -1,4 +1,4 @@
-export type LLMProvider = 'lovable' | 'openai' | 'anthropic' | 'gemini' | 'azure' | 'ollama' | 'custom';
+export type LLMProvider = 'openai' | 'anthropic' | 'gemini' | 'azure' | 'ollama' | 'custom';
 
 export interface AgentConfig {
   provider: LLMProvider;
