@@ -12,7 +12,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:prod": "npm run build && vite preview --host 0.0.0.0 --port 4173",
+    <<<<<<< codex/add-backend-auth-config-management-endpoints
     "server": "node server/index.js"
+=======
+    "providers:rotate-keys": "node scripts/rotate-provider-keys.mjs"
+    >>>>>>> codex/create-prs-for-multiple-issues
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
