@@ -329,29 +329,50 @@ export async function callAgent(
       const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
       const researchSystem = `${system}
 
-YOU ARE IN PRIVATE RESEARCH MODE (Loop ${loop}/${researchLoops}). No one can see this.
-Your goal: deeply research and prepare before your public response.
+YOU ARE IN PRIVATE RESEARCH MODE (Step ${loop} of ${researchLoops} available research steps). No one can see this.
+
+=== STRATEGY PLANNING ===
+You have exactly ${researchLoops} research step(s) total. You are currently on step ${loop}.
+${researchLoops - loop} step(s) remain after this one.
+
+${loop === 1 ? `FIRST STEP: Start by defining a SHORT STRATEGY — a plan you can execute within ${researchLoops} step(s).
+- What are the key questions you need to answer?
+- How will you distribute your effort across the available steps?
+- If you only have 1 step, focus on the single most impactful thing.
+- If you have 2-3 steps, split between gathering info and synthesizing.
+- If you have 4-5 steps, you can do deeper exploration before synthesis.
+
+Write your strategy to short-term memory as "strategy.md" so you can track it.` : `Review your strategy from "strategy.md" and execute the next planned action.
+Steps completed: ${loop - 1}/${researchLoops}. Steps remaining after this: ${researchLoops - loop}.
+${loop === researchLoops ? '⚠️ THIS IS YOUR FINAL RESEARCH STEP. Focus on consolidating findings.' : ''}`}
 
 ${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
 
+=== MEMORY GUIDELINES ===
+Use SHORT-TERM memory for step-by-step working notes (auto-pruned, limited count).
+Use LONG-TERM memory sparingly — only for durable insights that will matter across conversations.
+Do NOT dump everything into long-term memory. Be selective.
+
 INSTRUCTIONS:
-1. Review the conversation and identify knowledge gaps
-2. Think about what you need to research or verify
-3. Write your findings to memory files using the format below
-${toolsEnabled.includes('web_search') ? '4. Use web search if you need current information' : ''}
+1. Review the conversation and your strategy
+2. Execute the next step of your plan
+3. Write findings to SHORT-TERM memory files (working notes for this task)
+${loop === researchLoops ? '4. Consolidate your key findings into a concise summary in short-term memory' : ''}
+${toolsEnabled.includes('web_search') ? `${loop === researchLoops ? '5' : '4'}. Use web search if you need current information` : ''}
 
 OUTPUT FORMAT - respond with structured actions:
-THINK: [your reasoning about what to research next]
+THINK: [your reasoning about what to do in this step]
 WRITE_MEMORY|[scope]|[filename]|[category]|[content]
   - scope: "global" or "local" 
   - filename: descriptive name like "research-findings.md"
-  - category: long-term, short-term, research, task, or scratch
+  - category: short-term (working notes) or research (findings for this task)
   - content: markdown content to write
+  NOTE: Do NOT write to long-term memory during research loops. That happens automatically after your response.
 
 Example:
-THINK: I need to research the latest developments in quantum computing to support my argument.
-WRITE_MEMORY|local|quantum-research.md|research|## Quantum Computing Findings\n- Key point 1\n- Key point 2
-WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New insight about the topic`;
+THINK: Step 1 of 3 — I need to define my research strategy and start gathering key information.
+WRITE_MEMORY|local|strategy.md|short-term|## Research Strategy\n1. Identify key claims\n2. Verify with web search\n3. Synthesize findings
+WRITE_MEMORY|local|initial-findings.md|research|## First Pass Notes\n- Key point 1\n- Key point 2`;
 
       const loopAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1500) } };
       const loopResult = await callProviderRaw(loopAgent, researchSystem, history, toolsEnabled.length > 0 ? toolsEnabled : undefined);
@@ -359,7 +380,7 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
 
       // Parse and execute memory actions
       const lines = loopResult.content.split('\n');
-      let loopSummary = `**🔄 Research Loop ${loop}/${researchLoops}:**\n`;
+      let loopSummary = `**🔄 Research Step ${loop}/${researchLoops}:**\n`;
 
       for (const line of lines) {
         if (line.startsWith('THINK:')) {
@@ -371,7 +392,9 @@ WRITE_MEMORY|global|expertise-notes.md|long-term|## Updated Knowledge\n- New ins
           if (parts.length >= 5) {
             const memScope = parts[1] === 'global' ? 'global' : (roomId || 'global');
             const filename = parts[2];
-            const category = parts[3] as any;
+            // Force research loop writes to short-term or research only
+            let category = parts[3] as any;
+            if (category === 'long-term') category = 'short-term';
             const content = parts.slice(4).join('|').replace(/\\n/g, '\n');
             writeMemoryFile(agent.id, memScope, filename, content, category);
             currentDetail.filesWritten.push({ filename, scope: memScope, category });
@@ -496,10 +519,31 @@ Be honest and analytical in your thinking. This is your private space.`;
     }
   }
 
-  // Auto-save short-term memory of this response if memory enabled
+  // Auto-manage memory (does NOT count as a research loop)
   if (agent.memoryEnabled && roomId) {
+    // 1. Save current response as short-term working note
     const shortTermContent = `## Response at ${new Date().toISOString()}\n**Topic:** ${messages[messages.length - 1]?.content?.slice(0, 100) || 'conversation'}\n**Key points from my response:** ${publicResult.content.slice(0, 500)}`;
     writeMemoryFile(agent.id, roomId, `response-${Date.now()}.md`, shortTermContent, 'short-term');
+
+    // 2. Auto-consolidate: update long-term memory with a running summary
+    const existingLongTerm = getAgentMemories(agent.id, 'global')
+      .filter(f => f.category === 'long-term' && f.filename === 'running-summary.md');
+    const previousSummary = existingLongTerm.length > 0 ? existingLongTerm[0].content : '';
+    
+    // Build a compact long-term update from recent short-term memories
+    const recentShortTerm = getAgentMemories(agent.id, roomId)
+      .filter(f => f.category === 'short-term' || f.category === 'research')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 5)
+      .map(f => f.content.slice(0, 200))
+      .join('\n');
+
+    const updatedSummary = previousSummary
+      ? `${previousSummary.slice(0, 3000)}\n\n### Update (${new Date().toISOString().slice(0, 16)})\n${publicResult.content.slice(0, 300)}`
+      : `## ${agent.name} — Running Summary\n### ${new Date().toISOString().slice(0, 16)}\n${publicResult.content.slice(0, 500)}`;
+
+    // Keep long-term summary under size limit by trimming oldest entries
+    writeMemoryFile(agent.id, 'global', 'running-summary.md', updatedSummary.slice(0, 8000), 'long-term');
   }
 
   const latencyMs = Math.round(performance.now() - start);
