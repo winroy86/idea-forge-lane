@@ -162,6 +162,16 @@ export interface SkillStep {
   instruction: string;
   toolHint?: SkillToolHint;
   outputKey?: string; // name to store result for later steps
+  code?: string; // embedded code to auto-execute
+  codeLanguage?: 'javascript' | 'python'; // language of embedded code
+  codeMode?: 'auto-execute' | 'reference'; // auto-execute = run and return output; reference = inject into prompt
+}
+
+export interface SkillCodeFile {
+  filename: string;
+  language: 'javascript' | 'python';
+  content: string;
+  description?: string;
 }
 
 export interface SkillInputField {
@@ -183,6 +193,7 @@ export interface Skill {
   requiredPermissions: SkillPermission[];
   inputSchema: SkillInputField[];
   steps: SkillStep[];
+  codeFiles: SkillCodeFile[]; // standalone code files bundled with the skill
   outputFormat: string; // markdown template
   installedAt: string;
   isBuiltIn?: boolean;
