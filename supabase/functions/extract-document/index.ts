@@ -15,6 +15,38 @@ const VISION_SUPPORTED_MIMES = [
   "image/gif",
 ];
 
+
+type OpenAICompatibleProvider = "openai" | "azure" | "custom" | "ollama";
+
+function isLocalOpenAICompatibleUrl(url: string): boolean {
+  return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
+}
+
+function normalizeProvider(provider: string): OpenAICompatibleProvider {
+  if (provider === "azure" || provider === "custom" || provider === "ollama") return provider;
+  return "openai";
+}
+
+function providerRequiresApiKey(provider: OpenAICompatibleProvider, baseUrl: string): boolean {
+  // Ollama commonly runs locally without auth; keep keyless usage supported.
+  if (provider === "ollama") return false;
+
+  if (provider === "custom") {
+    const allowKeylessCustom = Deno.env.get("ALLOW_KEYLESS_CUSTOM_OPENAI") === "true";
+    return !(allowKeylessCustom || isLocalOpenAICompatibleUrl(baseUrl));
+  }
+
+  // OpenAI/Azure should remain strict about API key presence.
+  return true;
+}
+
+function buildOpenAICompatibleHeaders(apiKey?: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -30,9 +62,13 @@ serve(async (req) => {
       );
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const provider = normalizeProvider((Deno.env.get("OPENAI_COMPAT_PROVIDER") || Deno.env.get("AI_PROVIDER") || "openai").toLowerCase());
+    const openAICompatBaseUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "");
+    const chatCompletionsUrl = `${openAICompatBaseUrl}/chat/completions`;
+    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY") || "";
+
+    if (providerRequiresApiKey(provider, openAICompatBaseUrl) && !apiKey) {
+      throw new Error("API key is required for the configured AI provider");
     }
 
     const effectiveMime = mimeType || "application/pdf";
@@ -42,7 +78,7 @@ serve(async (req) => {
 
     if (isVisionSupported) {
       // Use Gemini vision for PDFs and images
-      extractedText = await extractWithVision(LOVABLE_API_KEY, fileBase64, effectiveMime, fileName);
+      extractedText = await extractWithVision(chatCompletionsUrl, apiKey, fileBase64, effectiveMime, fileName);
     } else {
       // For DOCX, PPTX, XLSX etc. — decode base64 and attempt to extract raw text
       // Then use AI to clean and structure it
@@ -51,7 +87,7 @@ serve(async (req) => {
         extractedText = rawText;
       } else {
         // If raw text extraction fails, ask AI to describe based on the filename
-        extractedText = await extractWithAIChat(LOVABLE_API_KEY, rawText, fileName, effectiveMime);
+        extractedText = await extractWithAIChat(chatCompletionsUrl, apiKey, rawText, fileName, effectiveMime);
       }
     }
 
@@ -69,17 +105,15 @@ serve(async (req) => {
 });
 
 async function extractWithVision(
+  chatCompletionsUrl: string,
   apiKey: string,
   fileBase64: string,
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const response = await fetch(chatCompletionsUrl, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: buildOpenAICompatibleHeaders(apiKey),
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
@@ -166,17 +200,15 @@ function extractRawText(fileBase64: string): string {
 
 // Use AI chat (non-vision) to clean up and structure raw extracted text
 async function extractWithAIChat(
+  chatCompletionsUrl: string,
   apiKey: string,
   rawText: string,
   fileName: string,
   mimeType: string
 ): Promise<string> {
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const response = await fetch(chatCompletionsUrl, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: buildOpenAICompatibleHeaders(apiKey),
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
