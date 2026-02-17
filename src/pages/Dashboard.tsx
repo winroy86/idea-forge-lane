@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { TID } from '@/testIds';
+import { hydrateRoomsFromServer } from '@/lib/storageAdapter';
 
 function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
   // ... keep existing code (CreateRoomDialog component)
@@ -162,7 +163,11 @@ export default function Dashboard() {
     setRooms(getRooms().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
     setMeetings(getAllMeetings());
   };
-  useEffect(refresh, []);
+
+  useEffect(() => {
+    refresh();
+    void hydrateRoomsFromServer().then(() => refresh());
+  }, []);
 
   return (
     <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { capabilities, capabilityLabel } from '@/lib/capabilities';
 import { TID } from '@/testIds';
+import { useAuth } from '@/lib/authContext';
 
 interface LayoutContextType {
   sidebarOpen: boolean;
@@ -32,6 +33,7 @@ const navItems = [
 export default function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const { authEnabled, authenticated, logout } = useAuth();
   const location = useLocation();
 
   const isActive = (path: string) => {
@@ -119,6 +121,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <span className={capabilities.documentExtraction ? 'text-emerald-500' : 'text-amber-500'}>
                 Doc extraction {capabilityLabel(capabilities.documentExtraction)}
               </span>
+              {authEnabled && authenticated && (
+                <button
+                  onClick={() => void logout()}
+                  className="ml-2 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  Logout
+                </button>
+              )}
             </div>
           </header>
 

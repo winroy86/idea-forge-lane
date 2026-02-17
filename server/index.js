@@ -116,6 +116,15 @@ app.post('/api/rooms', requireSession, (req, res) => {
   res.json({ ok: true });
 });
 
+
+app.delete('/api/rooms/:id', requireSession, (req, res) => {
+  const id = String(req.params.id || '');
+  if (!id) return res.status(400).json({ error: 'Missing room id' });
+  db.prepare('DELETE FROM rooms WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+
 ensurePasswordSetFromEnv().finally(() => {
   app.listen(PORT, HOST, () => {
     console.log(`Idea Forge server listening on http://${HOST}:${PORT}`);

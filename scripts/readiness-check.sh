@@ -46,6 +46,16 @@ if contains "case 'ollama':" src/lib/llm.ts; then pass "Ollama path available"; 
 if contains "case 'azure':" src/lib/llm.ts; then pass "Azure path available"; else warn "Azure path missing"; fi
 
 # 3) MCP, tools, and file/memory features
+if has_file "src/pages/LoginPage.tsx" && has_file "src/components/AuthGate.tsx"; then
+  pass "Frontend auth gate and login page exist"
+else
+  warn "Frontend auth gate/login missing"
+fi
+if contains "VITE_API_BASE_URL" src/lib/api.ts && has_file "src/lib/storageAdapter.ts"; then
+  pass "Storage adapter foundation exists for server-backed sync"
+else
+  warn "Storage adapter foundation missing"
+fi
 if has_file "server/index.js" && has_file "server/package.json"; then
   pass "Backend skeleton exists (Express + SQLite + auth/session endpoints)"
 else

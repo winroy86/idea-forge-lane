@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { TID } from '@/testIds';
+import { hydrateRoomsFromServer } from '@/lib/storageAdapter';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -178,20 +179,26 @@ export default function RoomView() {
 
   useEffect(() => {
     if (!id) return;
-    const r = getRoom(id);
-    if (!r) { navigate('/'); return; }
-    // Migrate old rooms
-    if (!r.documents) r.documents = [];
-    if (!r.meetings) r.meetings = [];
-    setRoom(r);
-    setAllAgents(getAgents());
-    setMessages(getMessages(id));
-    // Restore active meeting
-    const active = getActiveMeeting(id);
-    if (active && (active.status === 'active' || active.status === 'wrap-up')) {
-      setActiveMeeting(active);
-      wrapUpTriggeredRef.current = active.status === 'wrap-up';
-    }
+
+    const loadRoom = async () => {
+      await hydrateRoomsFromServer();
+      const r = getRoom(id);
+      if (!r) { navigate('/'); return; }
+      // Migrate old rooms
+      if (!r.documents) r.documents = [];
+      if (!r.meetings) r.meetings = [];
+      setRoom(r);
+      setAllAgents(getAgents());
+      setMessages(getMessages(id));
+      // Restore active meeting
+      const active = getActiveMeeting(id);
+      if (active && (active.status === 'active' || active.status === 'wrap-up')) {
+        setActiveMeeting(active);
+        wrapUpTriggeredRef.current = active.status === 'wrap-up';
+      }
+    };
+
+    void loadRoom();
   }, [id, navigate]);
 
   // Keep messagesRef in sync

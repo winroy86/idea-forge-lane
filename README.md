@@ -61,6 +61,20 @@ The app header includes a **Capabilities** indicator showing which of these are 
 ## Capability matrix (current)
 
 
+### Frontend auth + storage adapter foundation
+
+The frontend now includes:
+- `AuthProvider` + `AuthGate`
+- `/login` route/page
+- API session checks against backend (`/api/session`)
+- initial room hydration from backend when `VITE_API_BASE_URL` is configured
+
+Set API base URL in frontend `.env` when using backend mode:
+
+```sh
+VITE_API_BASE_URL=http://localhost:8788
+```
+
 ### Optional backend skeleton (SQLite + session auth)
 
 A backend foundation is available under `server/` with:
