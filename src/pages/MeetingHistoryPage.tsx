@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { ArrowLeft, Clock, Users, MessageSquare, Target, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Clock, Users, MessageSquare, Target, ChevronDown, ChevronRight, Download, FileText } from 'lucide-react';
 import { Room, Agent, Message, MeetingSession } from '@/types';
 import { getRoom, getAgents, getMessages, getMeetingSessions } from '@/lib/store';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 function getAgentColor(index: number) {
@@ -19,6 +21,106 @@ interface MeetingTimelineEntry {
 function formatDuration(mins: number): string {
   if (mins < 60) return `${mins}m`;
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function generateMarkdown(entries: MeetingTimelineEntry[], allAgents: Agent[], roomTitle: string): string {
+  let md = `# Meeting History — ${roomTitle}\n\n`;
+  md += `*Exported on ${new Date().toLocaleString()}*\n\n---\n\n`;
+
+  for (const { meeting, messages } of entries) {
+    md += `## ${meeting.topic}\n\n`;
+    md += `- **Date:** ${new Date(meeting.startTime).toLocaleString()}\n`;
+    md += `- **Duration:** ${formatDuration(meeting.durationMinutes)}\n`;
+    md += `- **Status:** ${meeting.status}\n`;
+    if (meeting.goals) md += `- **Goals:** ${meeting.goals}\n`;
+    if (meeting.additionalInfo) md += `- **Additional Info:** ${meeting.additionalInfo}\n`;
+
+    const counts = new Map<string, number>();
+    messages.filter(m => m.role === 'agent' && m.agentId).forEach(m => {
+      counts.set(m.agentId!, (counts.get(m.agentId!) || 0) + 1);
+    });
+    if (counts.size > 0) {
+      md += `\n### Participants\n\n`;
+      counts.forEach((count, agentId) => {
+        const agent = allAgents.find(a => a.id === agentId);
+        md += `- **${agent?.name || 'Unknown'}** (${agent?.role || ''}) — ${count} messages\n`;
+      });
+    }
+
+    const wrapUpIdx = messages.findIndex(m => m.role === 'system' && m.content.includes('final phase'));
+    const closingSummaries = wrapUpIdx >= 0 ? messages.slice(wrapUpIdx + 1).filter(m => m.role === 'agent') : [];
+    if (closingSummaries.length > 0) {
+      md += `\n### Closing Summaries\n\n`;
+      for (const msg of closingSummaries) {
+        const agent = allAgents.find(a => a.id === msg.agentId);
+        md += `#### ${agent?.name || 'Agent'} (${agent?.role || ''})\n\n${msg.content}\n\n`;
+      }
+    }
+
+    const summarizerMsgs = messages.filter(m => m.role === 'summarizer');
+    if (summarizerMsgs.length > 0) {
+      md += `\n### Summaries & Decisions\n\n`;
+      for (const msg of summarizerMsgs) {
+        md += `${msg.content}\n\n`;
+      }
+    }
+
+    md += `\n### Full Conversation\n\n`;
+    for (const msg of messages) {
+      const agent = msg.agentId ? allAgents.find(a => a.id === msg.agentId) : null;
+      if (msg.role === 'system') {
+        md += `> *${msg.content.replace(/\*\*/g, '')}*\n\n`;
+      } else if (msg.role === 'user') {
+        md += `**You:** ${msg.content}\n\n`;
+      } else if (msg.role === 'summarizer') {
+        md += `**Summarizer:** ${msg.content}\n\n`;
+      } else if (agent) {
+        md += `**${agent.name}:** ${msg.content}\n\n`;
+      }
+    }
+    md += `---\n\n`;
+  }
+  return md;
+}
+
+function downloadFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAsPdf(markdown: string, title: string) {
+  let html = markdown
+    .replace(/^# (.+)$/gm, '<h1 style="font-size:24px;margin-bottom:8px;">$1</h1>')
+    .replace(/^## (.+)$/gm, '<h2 style="font-size:20px;margin-top:24px;margin-bottom:8px;border-bottom:1px solid #ddd;padding-bottom:4px;">$1</h2>')
+    .replace(/^### (.+)$/gm, '<h3 style="font-size:16px;margin-top:16px;margin-bottom:6px;">$1</h3>')
+    .replace(/^#### (.+)$/gm, '<h4 style="font-size:14px;margin-top:12px;margin-bottom:4px;">$1</h4>')
+    .replace(/^\- \*\*(.+?)\*\*(.*)$/gm, '<li><strong>$1</strong>$2</li>')
+    .replace(/^\- (.+)$/gm, '<li>$1</li>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^> (.+)$/gm, '<blockquote style="border-left:3px solid #ccc;padding-left:12px;color:#666;margin:8px 0;">$1</blockquote>')
+    .replace(/^---$/gm, '<hr style="margin:24px 0;border:none;border-top:1px solid #ddd;">')
+    .replace(/\n\n/g, '<br><br>');
+
+  const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#222;line-height:1.6;font-size:13px;}
+h1{color:#111;}h2{color:#333;}h3{color:#444;}li{margin:2px 0;}
+@media print{body{margin:20px;padding:0;}}</style>
+</head><body>${html}</body></html>`;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(fullHtml);
+    win.document.close();
+    setTimeout(() => win.print(), 500);
+  }
 }
 
 function MeetingCard({ entry, allAgents }: { entry: MeetingTimelineEntry; allAgents: Agent[] }) {
@@ -217,6 +319,7 @@ function ConversationThread({ messages, allAgents }: { messages: Message[]; allA
 }
 
 export default function MeetingHistoryPage() {
+  const { toast } = useToast();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [room, setRoom] = useState<Room | null>(null);
@@ -258,10 +361,38 @@ export default function MeetingHistoryPage() {
         <button onClick={() => navigate(`/room/${room.id}`)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-xl font-semibold text-foreground">Meeting History</h1>
           <p className="text-sm text-muted-foreground">{room.title} — {entries.length} session{entries.length !== 1 ? 's' : ''}</p>
         </div>
+        {entries.length > 0 && (
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={() => {
+                const md = generateMarkdown(entries, allAgents, room.title);
+                downloadFile(md, `${room.title.replace(/\s+/g, '-').toLowerCase()}-meetings.md`, 'text/markdown');
+                toast({ title: '📄 Exported as Markdown' });
+              }}
+            >
+              <FileText className="h-3.5 w-3.5" /> Markdown
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={() => {
+                const md = generateMarkdown(entries, allAgents, room.title);
+                exportAsPdf(md, `${room.title} — Meeting History`);
+                toast({ title: '🖨️ PDF print dialog opened' });
+              }}
+            >
+              <Download className="h-3.5 w-3.5" /> PDF
+            </Button>
+          </div>
+        )}
       </div>
 
       {entries.length === 0 ? (
