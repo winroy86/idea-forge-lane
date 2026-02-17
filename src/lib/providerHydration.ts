@@ -7,15 +7,16 @@ const providersEndpoint = import.meta.env.VITE_PROVIDERS_ENDPOINT;
 let hydrationPromise: Promise<void> | null = null;
 let hydrationComplete = !hasSupabaseConfig;
 
-function normalizeProvider(input: Partial<ProviderConfig>, index: number): ProviderConfig | null {
-  if (!input.provider || !input.apiKey) return null;
+function normalizeProvider(input: Partial<ProviderConfig> & { base_url?: string; is_active?: boolean }, index: number): ProviderConfig | null {
+  if (!input.provider) return null;
   return {
     id: input.id || `hydrated-${input.provider}-${index}`,
     provider: input.provider as LLMProvider,
     label: input.label || `${input.provider}`,
     apiKey: input.apiKey,
-    baseUrl: input.baseUrl,
-    isActive: input.isActive ?? true,
+    baseUrl: input.baseUrl || input.base_url,
+    isActive: input.isActive ?? input.is_active ?? true,
+    secretStored: input.secretStored ?? true,
   };
 }
 
@@ -24,7 +25,7 @@ async function fetchProvidersFromServer(): Promise<ProviderConfig[]> {
   const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
   if (!supabaseUrl || !supabaseKey) return [];
 
-  const endpoint = providersEndpoint || `${supabaseUrl}/functions/v1/providers`;
+  const endpoint = providersEndpoint || `${supabaseUrl}/functions/v1/provider-secrets`;
   const res = await fetch(endpoint, {
     headers: {
       'Content-Type': 'application/json',

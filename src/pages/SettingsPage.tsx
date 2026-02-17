@@ -5,16 +5,67 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
+import { apiFetch } from '@/lib/apiFetch';
 import { getAppSettings, saveAppSettings } from '@/lib/store';
 import { LLMProvider } from '@/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
+type AuthSettingsResponse = {
+  enabled: boolean;
+  hasPassword: boolean;
+  updatedAt?: string;
+  sessionActive: boolean;
+};
+
+type SaveAuthResponse = {
+  success: boolean;
+  enabled: boolean;
+  hasPassword: boolean;
+  message: string;
+  sessionToken?: string;
+};
+
+const AUTH_SESSION_KEY = 'authSessionToken';
+
 export default function SettingsPage() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [password, setPassword] = useState('');
+  const [hasPassword, setHasPassword] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [authenticating, setAuthenticating] = useState(false);
   const [summarizerSettings, setSummarizerSettings] = useState(() => getAppSettings().summarizer);
   const { toast } = useToast();
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem(AUTH_SESSION_KEY);
+    return token ? { 'x-auth-session': token } : {};
+  };
+
+  const fetchAuthConfig = async () => {
+    setLoadingAuth(true);
+    try {
+      const config = await apiFetch<AuthSettingsResponse>('/api/settings/auth', {
+        headers: getAuthHeaders(),
+      });
+      setAuthEnabled(config.enabled);
+      setHasPassword(config.hasPassword);
+      setSessionActive(config.sessionActive);
+      if (!config.sessionActive) {
+        localStorage.removeItem(AUTH_SESSION_KEY);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load authentication settings.';
+      toast({ title: 'Error loading auth settings', description: message, variant: 'destructive' });
+    } finally {
+      setLoadingAuth(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchAuthConfig();
+  }, []);
 
   const updateSummarizerSetting = (patch: Partial<typeof summarizerSettings>) => {
     const next = { ...summarizerSettings, ...patch };
@@ -136,7 +187,6 @@ export default function SettingsPage() {
             </Button>
           </div>
         </div>
-
 
         {/* Summarizer */}
         <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
