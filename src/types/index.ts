@@ -107,9 +107,10 @@ export interface ProviderConfig {
   id: string;
   provider: LLMProvider;
   label: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
   isActive: boolean;
+  secretStored?: boolean;
 }
 
 export type MeetingStatus = 'scheduled' | 'active' | 'wrap-up' | 'ended';
@@ -125,6 +126,16 @@ export interface MeetingSession {
   durationMinutes: number;
   status: MeetingStatus;
   createdAt: string;
+}
+
+export interface SummarizerSettings {
+  provider: LLMProvider;
+  model: string;
+  baseUrl?: string;
+}
+
+export interface AppSettings {
+  summarizer: SummarizerSettings;
 }
 
 export interface MeetingContext {

@@ -1,139 +1,100 @@
-# Welcome to your Lovable project
+# Idea Forge Lane
 
-## Project info
+A local-first multi-agent brainstorming studio built with React + Vite + Supabase Edge Functions.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## What this project does
 
-## How can I edit this code?
+- Create and manage AI agents with different roles, prompts, model settings, permissions, memories, and MCP server attachments.
+- Run multi-agent room conversations with orchestration modes (manual/sequence/loop/auto).
+- Install/import skills (JSON/ZIP) that inject structured workflows into agent prompts.
+- Use optional tools in agent responses: web search, JS code execution, MCP tool calls.
+- Persist room/agent/message/provider data in browser localStorage.
 
-There are several ways of editing your application.
+## Local setup
 
-**Use Lovable**
+### 1) Prerequisites
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+- Node.js 18+
+- npm
+- (optional) Python 3, if you want Python execution through local MCP tools
+- (optional) Supabase CLI for local edge function runtime
 
-Changes made via Lovable will be committed automatically to this repo.
+### 2) Install + run frontend
 
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```bash
+npm install
 npm run dev
 ```
 
-## Environment configuration
+Then open `http://localhost:5173`.
 
-Copy `.env.example` to `.env` and fill values only when you want cloud features:
+### 3) Run local health/capability checks
 
-```sh
-cp .env.example .env
+```bash
+npm run doctor:local
 ```
 
-### Local-first mode (no env vars)
+This verifies local runtime prerequisites (Node/npm/Python/Supabase CLI), outgoing web access, and checks MCP connectivity if `LOCAL_MCP_URL` is set.
 
-If `.env` is empty, the app still boots and all local features work (Rooms, Agents, Skills, Providers via browser storage).
+## Agent capability matrix (what works locally)
 
-### Cloud-enabled mode (Supabase)
+| Capability | Status | Notes |
+|---|---|---|
+| Web search | ✅ | Implemented in `supabase/functions/agent-chat` via Google/Wikipedia + summary synthesis. |
+| JavaScript code execution | ✅ | Implemented in `agent-chat` (`code_execution` tool). |
+| TypeScript code execution | ⚠️ | Parameter accepts it, but execution path is JS runtime; TS syntax requiring transpilation is not supported. |
+| Python execution | ⚠️ | Not native in `agent-chat`; use MCP local tools server (`run_python`). |
+| Local file read/write | ⚠️ | Not native in `agent-chat`; use MCP local tools server (`read_file`, `write_file`). |
+| MCP integrations | ✅ | Agents can discover tools and call MCP servers (with optional bearer/api-key auth). |
+| Skills | ✅ | Built-in + importable skills, prompt-injected based on triggers/permissions. |
 
-Set both values to enable:
+## Enabling Python + local filesystem access through MCP
 
-- Persona generation
-- Document extraction for non-text formats
-- Lovable cloud chat/summarizer path
+Start bundled local MCP server:
 
-Required vars:
-
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_PUBLISHABLE_KEY`
-
-The app header includes a **Capabilities** indicator showing which of these are enabled at runtime.
-
-## Production smoke boot
-
-Validate production boot locally:
-
-```sh
-npm run smoke:prod
+```bash
+npm run mcp:local
 ```
 
-This runs a production build and starts Vite preview.
+Defaults:
+- URL: `http://localhost:8787`
+- Root folder scope: current working directory
 
-## Readiness check
+Optional environment variables:
+- `LOCAL_MCP_PORT` (default `8787`)
+- `LOCAL_MCP_ROOT` (default current directory)
+- `LOCAL_MCP_TOKEN` (optional bearer token)
 
-Run the readiness script to quickly verify backend/provider integration status:
+Then in the app:
+1. Open **Agents**.
+2. Add an MCP server pointing to your local URL.
+3. Discover tools and enable that server for the agent.
 
-```sh
-./scripts/readiness-check.sh
+The included MCP server exposes:
+- `read_file`
+- `write_file`
+- `run_javascript`
+- `run_python`
+
+
+## Provider wiring for edge functions
+
+The following Supabase edge functions now accept an `llm` object in the request body so they are not tied to a hard-coded provider/model:
+- `generate-persona`
+- `extract-document`
+
+The frontend sends this `llm` object using the active provider settings configured in **Providers** (API key/base URL/provider type) plus a default model per provider.
+
+## Running tests and checks
+
+```bash
+npm run lint
+npm run test
+npm run build
 ```
 
-The output is intentionally split into:
+## Security notes
 
-- **Foundation present**: baseline capabilities detected.
-- **Production-hardening pending**: missing pieces that should be resolved before production.
-- **Warnings**: risk indicators that do not fail the check but can still cause insecure or fragile behavior.
-
-Current checks include:
-
-- Presence of `/api/providers` route in `server/index.js`.
-- Encryption helper usage and encrypted provider key field checks (`encryptText`, `decryptText`, `api_key_encrypted`) in `server/index.js`.
-- Frontend provider backend sync hook presence in `src/lib/storageAdapter.ts`.
-- Warning when `src/lib/llm.ts` appears to still depend on client-stored provider secrets in backend mode.
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
-
-## Provider key management
-
-Server-side provider key encryption/rotation runbook is documented in:
-
-- `docs/provider-key-rotation.md`
-- rotation command: `node scripts/rotate-provider-keys.mjs`
-
+- The local MCP server can read/write files inside `LOCAL_MCP_ROOT`; scope it carefully.
+- If you expose MCP over a network, set `LOCAL_MCP_TOKEN` and use HTTPS/reverse proxy.
+- Current app auth in settings is UI-level only and not a hardened production auth system.

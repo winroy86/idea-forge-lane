@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -180,7 +181,7 @@ async function searchGoogle(query: string): Promise<{ snippets: string[]; source
   }
 }
 
-async function performWebSearch(query: string, apiKey: string): Promise<{ result: string; sources: string[] }> {
+async function performWebSearch(query: string, apiKey: string, synthesisModel: string): Promise<{ result: string; sources: string[] }> {
   // Try Google first, then Wikipedia
   let { snippets, sources } = await searchGoogle(query);
 
@@ -199,7 +200,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
+        model: synthesisModel,
         messages: [
           {
             role: "system",
@@ -232,7 +233,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash-lite",
+      model: synthesisModel,
       messages: [
         {
           role: "system",
@@ -436,17 +437,53 @@ async function callMcpTool(serverUrl: string, toolName: string, args: Record<str
   }
 }
 
+
+function isOpenAICompatibleProvider(provider: string): boolean {
+  return provider === 'lovable' || provider === 'openai' || provider === 'azure' || provider === 'ollama' || provider === 'custom';
+}
+
+function resolveOpenAICompatibleBaseUrl(provider: string, baseUrl?: string): string {
+  if (provider === 'lovable') return 'https://ai.gateway.lovable.dev/v1';
+  if (provider === 'openai') return 'https://api.openai.com/v1';
+  if (provider === 'ollama') return baseUrl || 'http://localhost:11434/v1';
+  if (provider === 'azure') return baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT';
+  if (provider === 'custom') return baseUrl || '';
+  return baseUrl || '';
+}
+
+function buildProviderHeaders(provider: string, apiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (!apiKey) return headers;
+  if (provider === 'anthropic') {
+    headers['x-api-key'] = apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  return headers;
+}
+
+async function callOpenAICompatibleProvider(baseUrl: string, apiKey: string | undefined, body: Record<string, unknown>, provider: string): Promise<Response> {
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  return fetch(url, {
+    method: 'POST',
+    headers: buildProviderHeaders(provider, apiKey),
+    body: JSON.stringify(body),
+  });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
+    const { provider = 'lovable', api_key, base_url, messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const providerApiKey = provider === 'lovable' ? LOVABLE_API_KEY : api_key;
+    if (!providerApiKey) {
+      throw new Error(provider === 'lovable' ? 'LOVABLE_API_KEY is not configured' : `Missing API key for provider: ${provider}`);
     }
 
     // Populate MCP auth configs from incoming server data
@@ -507,14 +544,54 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    let response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url);
+    if (isOpenAICompatibleProvider(provider) && !targetBaseUrl) {
+      throw new Error(`No base URL configured for provider: ${provider}`);
+    }
+
+    let response = isOpenAICompatibleProvider(provider)
+      ? await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, body, provider)
+      : null;
+
+    if (!response) {
+      if (provider === 'anthropic') {
+        response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: buildProviderHeaders(provider, providerApiKey),
+          body: JSON.stringify({
+            model: model || 'claude-sonnet-4-20250514',
+            max_tokens: max_tokens ?? 2048,
+            temperature: temperature ?? 0.7,
+            top_p: top_p ?? 1,
+            system: (messages?.find((m: any) => m.role === 'system')?.content) || '',
+            messages: (messages || []).filter((m: any) => m.role !== 'system').map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.content,
+            })),
+          }),
+        });
+      } else if (provider === 'gemini') {
+        const geminiModel = model || 'gemini-2.0-flash';
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${providerApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: (messages?.find((m: any) => m.role === 'system')?.content) || '' }] },
+            contents: (messages || []).filter((m: any) => m.role !== 'system').map((m: any) => ({
+              role: m.role === 'assistant' ? 'model' : 'user',
+              parts: [{ text: m.content }],
+            })),
+            generationConfig: {
+              temperature: temperature ?? 0.7,
+              topP: top_p ?? 1,
+              maxOutputTokens: max_tokens ?? 2048,
+            },
+          }),
+        });
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+    }
 
     // If gateway returns 500 with tools, retry without tools as fallback
     if (response.status === 500 && tools.length > 0) {
@@ -522,14 +599,7 @@ serve(async (req) => {
       const bodyNoTools = { ...body };
       delete bodyNoTools.tools;
       delete bodyNoTools.tool_choice;
-      response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(bodyNoTools),
-      });
+      response = await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, bodyNoTools, provider);
     }
 
     if (!response.ok) {
@@ -554,6 +624,20 @@ serve(async (req) => {
     }
 
     let data = await response.json();
+
+    if (!isOpenAICompatibleProvider(provider)) {
+      if (provider === 'anthropic') {
+        data = {
+          choices: [{ message: { content: data.content?.[0]?.text || 'No response' } }],
+          usage: data.usage,
+        };
+      } else if (provider === 'gemini') {
+        data = {
+          choices: [{ message: { content: data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response' } }],
+        };
+      }
+    }
+
     const toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> = [];
 
     // Build MCP server lookup
@@ -568,7 +652,7 @@ serve(async (req) => {
     }
 
     let iterations = 0;
-    while (iterations < 5) {
+    while (isOpenAICompatibleProvider(provider) && iterations < 5) {
       const choice = data.choices?.[0];
       if (!choice?.message?.tool_calls || choice.message.tool_calls.length === 0) break;
 
@@ -583,7 +667,11 @@ serve(async (req) => {
         if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
-          const searchResult = await performWebSearch(query, LOVABLE_API_KEY);
+ <<<<<<< codex/refactor-tool-orchestration-architecture
+          const searchResult = await performWebSearch(query, providerApiKey);
+          const searchModel = typeof model === "string" && model ? model : "google/gemini-3-flash-preview";
+          const searchResult = await performWebSearch(query, LOVABLE_API_KEY, searchModel);
+ >>>>>>> main
           toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
           toolResult = searchResult.result;
         } else if (fnName === "code_execution") {
@@ -618,14 +706,7 @@ serve(async (req) => {
       }
 
       body.messages = updatedMessages;
-      const followUp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
+      const followUp = await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, body, provider);
 
       if (!followUp.ok) {
         const errText = await followUp.text();
@@ -641,7 +722,14 @@ serve(async (req) => {
       data._toolCallsMade = toolCallsMade;
     }
 
-    return new Response(JSON.stringify(data), {
+    const normalized = {
+      content: data.choices?.[0]?.message?.content || "",
+      usage: data.usage,
+      toolCallsMade,
+      raw: data,
+    };
+
+    return new Response(JSON.stringify(normalized), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

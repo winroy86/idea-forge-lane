@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
-import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
-import { waitForProviderHydration } from '@/lib/providerHydration';
+import { getProviders, upsertProvider, deleteProvider, generateId, getLocalDevMode, setLocalDevMode } from '@/lib/store';
+import { supabase } from '@/integrations/supabase/client';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { testIds } from '@/testIds';
@@ -45,8 +45,34 @@ export default function ProvidersPage() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
   const [ollamaDetecting, setOllamaDetecting] = useState(false);
   const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'found' | 'notfound'>('idle');
+  const [localDevMode, setLocalDevModeState] = useState<boolean>(getLocalDevMode());
 
-  const detectOllama = async (url?: string) => {
+  
+
+  const getEdgeBase = () => import.meta.env.VITE_SUPABASE_URL;
+
+  const getAuthToken = async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token || '';
+  };
+
+  const loadRemoteProviders = async () => {
+    const supabaseUrl = getEdgeBase();
+    if (!supabaseUrl) return;
+    const token = await getAuthToken();
+    if (!token) return;
+    const res = await fetch(`${supabaseUrl}/functions/v1/provider-secrets`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const mapped = (data.providers || []).map((r: any) => ({
+      id: r.id, provider: r.provider, label: r.label, baseUrl: r.base_url || undefined, isActive: r.is_active, secretStored: true,
+    }));
+    setProviders(mapped);
+    mapped.forEach((p: ProviderConfig) => upsertProvider(p));
+  };
+const detectOllama = async (url?: string) => {
     setOllamaDetecting(true);
     setOllamaStatus('idle');
     const models = await detectOllamaModels(url || newBaseUrl || 'http://localhost:11434');
@@ -66,21 +92,32 @@ export default function ProvidersPage() {
   }, [newProvider, open]);
 
   const refresh = () => setProviders(getProviders());
-
   useEffect(() => {
     refresh();
-    waitForProviderHydration().then(refresh);
-  }, []);
+    if (!localDevMode) loadRemoteProviders();
+  }, [localDevMode]);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const p: ProviderConfig = {
       id: generateId(),
       provider: newProvider,
       label: newLabel.trim() || PROVIDERS.find(p => p.value === newProvider)!.label,
-      apiKey: newKey,
+      apiKey: localDevMode ? newKey : undefined,
+      secretStored: !localDevMode || undefined,
       baseUrl: newBaseUrl || undefined,
       isActive: true,
     };
+    if (!localDevMode && newProvider !== "lovable") {
+      const supabaseUrl = getEdgeBase();
+      const token = await getAuthToken();
+      if (supabaseUrl && token) {
+        await fetch(`${supabaseUrl}/functions/v1/provider-secrets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ id: p.id, provider: p.provider, label: p.label, baseUrl: p.baseUrl, apiKey: newKey, isActive: true }),
+        });
+      }
+    }
     upsertProvider(p);
     setOpen(false);
     setNewKey('');
@@ -94,7 +131,11 @@ export default function ProvidersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Providers</h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage API keys and endpoints for LLM providers.</p>
+          <p className="text-sm text-muted-foreground mt-1">Manage provider references and endpoints. Secrets are server-side unless local-dev mode is enabled.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-xs">Local-dev mode</Label>
+          <Switch checked={localDevMode} onCheckedChange={(v) => { setLocalDevModeState(v); setLocalDevMode(v); }} />
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -124,8 +165,8 @@ export default function ProvidersPage() {
                     <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" data-testid={testIds.providers.labelInput} />
                   </div>
                   <div>
-                    <Label>API Key</Label>
-                    <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} data-testid={testIds.providers.keyInput} />
+                    <Label>{localDevMode ? "API Key (stored in browser)" : "API Key (stored on server)"}</Label>
+                    <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} />
                   </div>
                 </>
               )}
@@ -204,15 +245,29 @@ export default function ProvidersPage() {
                 <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">{p.provider}</span>
               </div>
               <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground font-mono">
-                {showKeys[p.id] ? p.apiKey : '•'.repeat(Math.min(p.apiKey.length, 24))}
+                {localDevMode ? (showKeys[p.id] ? (p.apiKey || '') : '•'.repeat(Math.min((p.apiKey || '').length, 24))) : (p.secretStored ? 'Stored server-side' : 'No secret')}
                 <button onClick={() => setShowKeys(prev => ({ ...prev, [p.id]: !prev[p.id] }))} className="p-0.5 hover:text-foreground">
                   {showKeys[p.id] ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                 </button>
               </div>
               {p.baseUrl && <div className="text-[10px] text-muted-foreground mt-0.5">{p.baseUrl}</div>}
             </div>
-            <Switch data-testid={testIds.providers.rowToggle(p.id)} checked={p.isActive} onCheckedChange={v => { upsertProvider({ ...p, isActive: v }); refresh(); }} />
-            <button data-testid={testIds.providers.rowDelete(p.id)} onClick={() => { deleteProvider(p.id); refresh(); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+            <Switch checked={p.isActive} onCheckedChange={async v => {
+              upsertProvider({ ...p, isActive: v });
+              if (!localDevMode) {
+                const supabaseUrl = getEdgeBase();
+                const token = await getAuthToken();
+                if (supabaseUrl && token) {
+                  await fetch(`${supabaseUrl}/functions/v1/provider-secrets`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ id: p.id, provider: p.provider, label: p.label, baseUrl: p.baseUrl, apiKey: newKey || "unchanged", isActive: v }),
+                  });
+                }
+              }
+              refresh();
+            }} />
+            <button onClick={async () => { deleteProvider(p.id); if (!localDevMode) { const supabaseUrl = getEdgeBase(); const token = await getAuthToken(); if (supabaseUrl && token) { await fetch(`${supabaseUrl}/functions/v1/provider-secrets`, { method: "DELETE", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: p.id }) }); } } refresh(); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
@@ -221,7 +276,7 @@ export default function ProvidersPage() {
 
       <div className="mt-8 rounded-lg border border-border bg-muted/50 p-4">
         <p className="text-xs text-muted-foreground">
-          <strong>Note:</strong> API keys are stored in your browser's localStorage. In a production setup, these would be encrypted and stored in Docker secrets or a .env file. This frontend is designed to be connected to a self-hosted backend.
+          <strong>Note:</strong> In default mode, provider secrets are stored server-side and the frontend keeps only provider references. Enable Local-dev mode only for local testing where browser-stored keys are acceptable.
         </p>
       </div>
     </div>

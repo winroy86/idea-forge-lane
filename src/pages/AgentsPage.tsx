@@ -28,7 +28,11 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
-import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
+import { supabase } from '@/integrations/supabase/client';
+ <<<<<<< codex/update-provider-selection-compatibility-logic
+import { DEFAULT_MODELS, getDefaultLlmSelection } from '@/lib/providerSelection';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
+        >>>>>>> main
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
@@ -39,7 +43,7 @@ const FAMOUS_SUGGESTIONS = [
 
 const DEFAULT_CONFIG: AgentConfig = {
   provider: 'lovable',
-  model: 'google/gemini-3-flash-preview',
+  model: DEFAULT_MODELS.lovable,
   temperature: 0.7,
   topP: 1,
   maxTokens: 2048,
@@ -183,7 +187,17 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Provider</Label>
-              <Select value={form.config.provider} onValueChange={v => updateConfig({ provider: v as LLMProvider })}>
+              <Select
+                value={form.config.provider}
+                onValueChange={v => {
+                  const provider = v as LLMProvider;
+                  const selection = getDefaultLlmSelection({
+                    provider,
+                    preferredModel: form.config.model,
+                  });
+                  updateConfig(selection);
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
@@ -575,10 +589,11 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
 
     setIsGenerating(true);
     try {
+      const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
       const { data, error } = await supabase.functions.invoke('generate-persona', {
         body: mode === 'famous'
-          ? { personName: personName.trim(), description: description.trim() }
-          : { description: description.trim() },
+          ? { personName: personName.trim(), description: description.trim(), llm }
+          : { description: description.trim(), llm },
       });
 
       if (error) throw new Error(error.message);

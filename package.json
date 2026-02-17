@@ -11,18 +11,14 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "smoke:prod": "npm run build && vite preview --host 0.0.0.0 --port 4173",
-    <<<<<<< codex/add-backend-auth-config-management-endpoints
-    <<<<<<< codex/add-backend-auth-config-management-endpoints
-    "server": "node server/index.js"
-=======
     <<<<<<< codex/add-playwright-tests-and-ci-workflow
     "test:e2e": "npx playwright test",
     "test:e2e:auth": "AUTH_ENABLED=true npx playwright test"
     >>>>>>> codex/create-prs-for-multiple-issues
-=======
     "providers:rotate-keys": "node scripts/rotate-provider-keys.mjs"
     >>>>>>> codex/create-prs-for-multiple-issues
+    "doctor:local": "node scripts/local-capability-check.mjs",
+    "mcp:local": "node tools-local-mcp-server.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

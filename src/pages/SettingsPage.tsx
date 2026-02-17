@@ -5,63 +5,22 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { apiFetch } from '@/lib/apiFetch';
-
-type AuthSettingsResponse = {
-  enabled: boolean;
-  hasPassword: boolean;
-  updatedAt?: string;
-  sessionActive: boolean;
-};
-
-type SaveAuthResponse = {
-  success: boolean;
-  enabled: boolean;
-  hasPassword: boolean;
-  message: string;
-  sessionToken?: string;
-};
-
-const AUTH_SESSION_KEY = 'authSessionToken';
+import { getAppSettings, saveAppSettings } from '@/lib/store';
+import { LLMProvider } from '@/types';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function SettingsPage() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [password, setPassword] = useState('');
-  const [hasPassword, setHasPassword] = useState(false);
-  const [sessionActive, setSessionActive] = useState(false);
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [authenticating, setAuthenticating] = useState(false);
+  const [summarizerSettings, setSummarizerSettings] = useState(() => getAppSettings().summarizer);
   const { toast } = useToast();
 
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem(AUTH_SESSION_KEY);
-    return token ? { 'x-auth-session': token } : {};
-  };
 
-  const fetchAuthConfig = async () => {
-    setLoadingAuth(true);
-    try {
-      const config = await apiFetch<AuthSettingsResponse>('/api/settings/auth', {
-        headers: getAuthHeaders(),
-      });
-      setAuthEnabled(config.enabled);
-      setHasPassword(config.hasPassword);
-      setSessionActive(config.sessionActive);
-      if (!config.sessionActive) {
-        localStorage.removeItem(AUTH_SESSION_KEY);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load authentication settings.';
-      toast({ title: 'Error loading auth settings', description: message, variant: 'destructive' });
-    } finally {
-      setLoadingAuth(false);
-    }
+  const updateSummarizerSetting = (patch: Partial<typeof summarizerSettings>) => {
+    const next = { ...summarizerSettings, ...patch };
+    setSummarizerSettings(next);
+    saveAppSettings({ ...getAppSettings(), summarizer: next });
   };
-
-  useEffect(() => {
-    void fetchAuthConfig();
-  }, []);
 
   const handleClearData = () => {
     if (confirm('This will delete ALL rooms, agents, messages, and provider settings. Continue?')) {
@@ -178,6 +137,37 @@ export default function SettingsPage() {
           </div>
         </div>
 
+
+        {/* Summarizer */}
+        <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Summarizer</h2>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Provider</Label>
+              <Select value={summarizerSettings.provider} onValueChange={(value) => updateSummarizerSetting({ provider: value as LLMProvider })}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="lovable">Lovable AI</SelectItem>
+                  <SelectItem value="openai">OpenAI</SelectItem>
+                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="gemini">Gemini</SelectItem>
+                  <SelectItem value="azure">Azure OpenAI</SelectItem>
+                  <SelectItem value="ollama">Ollama</SelectItem>
+                  <SelectItem value="custom">Custom OpenAI-compatible</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Model</Label>
+              <Input className="mt-1" value={summarizerSettings.model} onChange={e => updateSummarizerSetting({ model: e.target.value })} placeholder="e.g. gpt-4o-mini" />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Base URL (optional)</Label>
+              <Input className="mt-1" value={summarizerSettings.baseUrl || ''} onChange={e => updateSummarizerSetting({ baseUrl: e.target.value || undefined })} placeholder="Needed for custom/azure/ollama as applicable" />
+            </div>
+          </div>
+        </div>
+
         {/* Data */}
         <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
           <div className="flex items-center gap-3 mb-4">
@@ -186,7 +176,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              All data is currently stored in your browser's localStorage. In the Docker deployment, data will be persisted to a mounted volume at <code className="font-mono bg-muted px-1 rounded">/data</code>.
+              Most app data is currently stored in your browser's localStorage. Provider API secrets are server-side by default unless Local-dev mode is enabled.
             </p>
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               Clear All Data

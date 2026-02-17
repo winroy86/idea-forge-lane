@@ -1,4 +1,4 @@
-import { Agent, Room, Message, ProviderConfig, MeetingSession } from '@/types';
+import { Agent, Room, Message, ProviderConfig, MeetingSession, AppSettings } from '@/types';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -19,6 +19,7 @@ const KEYS = {
   messages: 'br_messages',
   providers: 'br_providers',
   meetings: 'br_meetings',
+  settings: 'br_settings',
 };
 
 // Rooms
@@ -81,5 +82,33 @@ export const getActiveMeeting = (roomId: string): MeetingSession | undefined => 
   return getAllMeetings().find(m => m.id === room.activeMeetingId);
 };
 
+
+
+// Settings
+const DEFAULT_SETTINGS: AppSettings = {
+  summarizer: {
+    provider: 'lovable',
+    model: 'google/gemini-3-flash-preview',
+  },
+};
+
+export const getAppSettings = (): AppSettings => {
+  const loaded = load<Partial<AppSettings>>(KEYS.settings, DEFAULT_SETTINGS);
+  return {
+    ...DEFAULT_SETTINGS,
+    ...loaded,
+    summarizer: {
+      ...DEFAULT_SETTINGS.summarizer,
+      ...(loaded.summarizer || {}),
+    },
+  };
+};
+export const saveAppSettings = (settings: AppSettings) => save(KEYS.settings, settings);
+
 // Utility
 export const generateId = () => crypto.randomUUID();
+
+
+// Credentials mode
+export const getLocalDevMode = (): boolean => load(KEYS.localDevMode, false);
+export const setLocalDevMode = (enabled: boolean) => save(KEYS.localDevMode, enabled);
