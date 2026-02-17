@@ -127,6 +127,16 @@ export interface MeetingSession {
   createdAt: string;
 }
 
+export interface SummarizerSettings {
+  provider: LLMProvider;
+  model: string;
+  baseUrl?: string;
+}
+
+export interface AppSettings {
+  summarizer: SummarizerSettings;
+}
+
 export interface MeetingContext {
   topic: string;
   goals: string;

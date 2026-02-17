@@ -1,5 +1,5 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
-import { getProviders } from '@/lib/store';
+import { getAppSettings, getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
 import { getDefaultLlmSelection } from '@/lib/providerSelection';
@@ -632,19 +632,35 @@ async function callProviderRaw(
   return { content, tokensUsed, toolCallsMade };
 }
 
-// ---- Summarizer (uses first available provider) ----
+// ---- Summarizer ----
+
+interface SummarizerCallOptions {
+  provider?: Agent['config']['provider'];
+  model?: string;
+  baseUrl?: string;
+}
 
 export async function callSummarizer(
   action: SummarizerAction,
   messages: Message[],
   allAgents: Agent[],
+  options?: SummarizerCallOptions,
 ): Promise<LLMResponse> {
-  // Prefer Lovable AI for summarizer (no API key needed)
-  const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
-  const providers = getProviders().filter(p => p.isActive);
+  const appSettings = getAppSettings();
+  const configured = appSettings.summarizer;
+  const selectedProvider = options?.provider || configured.provider;
+  const selectedModel = options?.model || configured.model;
+  const selectedBaseUrl = options?.baseUrl ?? configured.baseUrl;
 
-  if (!hasLovableCloud && providers.length === 0) {
-    throw new Error('No active providers configured. Go to Providers to add an API key.');
+  if (!selectedProvider || !selectedModel) {
+    throw new Error('Summarizer settings are incomplete. Configure provider and model in Settings.');
+  }
+
+  if (selectedProvider !== 'lovable') {
+    const provider = findProvider(selectedProvider, selectedBaseUrl);
+    if (!provider) {
+      throw new Error(`No active provider configured for "${selectedProvider}". Go to Providers to add an API key.`);
+    }
   }
 
   const actionPrompts: Record<SummarizerAction, string> = {
@@ -661,6 +677,36 @@ export async function callSummarizer(
     return { role: 'user' as const, content: `${prefix}: ${m.content}` };
   });
 
+ <<<<<<< codex/refactor-callsummarizer-to-respect-settings
+  const summarizerAgent = {
+    id: 'summarizer',
+    name: 'Summarizer',
+    role: 'Summarizer',
+    domain: '',
+    pointOfView: '',
+    systemPrompt: '',
+    styleVoice: '',
+    colorIndex: 0,
+    memoryEnabled: false,
+    researchLoops: 0,
+    memoryScopeDefault: 'local' as const,
+    skills: [],
+    mcpServers: [],
+    permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
+    createdAt: '',
+    updatedAt: '',
+    config: {
+      provider: selectedProvider,
+      model: selectedModel,
+      baseUrl: selectedBaseUrl,
+      temperature: 0.3,
+      topP: 1,
+      maxTokens: 2048,
+      presencePenalty: 0,
+      frequencyPenalty: 0,
+    },
+  } as Agent;
+=======
   const start = performance.now();
   let content = '';
   let usedModel = '';
@@ -709,37 +755,15 @@ export async function callSummarizer(
         frequencyPenalty: 0,
       },
     } as Agent;
+ >>>>>>> main
 
-    switch (provider.provider) {
-      case 'anthropic': {
-        const result = await callAnthropic(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      case 'gemini': {
-        const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      default: {
-        const baseUrl = provider.provider === 'ollama'
-          ? (provider.baseUrl || 'http://localhost:11434/v1')
-          : provider.provider === 'custom'
-          ? (provider.baseUrl || '')
-          : 'https://api.openai.com/v1';
-        const result = await callOpenAICompatible(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-    }
-    usedModel = tempAgent.config.model;
-    usedProvider = provider.provider;
-  }
+  const start = performance.now();
+  const result = await callProviderRaw(summarizerAgent, system, history);
 
   return {
-    content,
+    content: result.content,
     latencyMs: Math.round(performance.now() - start),
-    model: usedModel,
-    provider: usedProvider,
+    model: selectedModel,
+    provider: selectedProvider,
   };
 }

@@ -937,7 +937,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {msg.metadata && (
                       <>
-                        <span>{msg.metadata.model}</span>
+                        <span>{msg.metadata.provider}/{msg.metadata.model}</span>
                         <span>{msg.metadata.tokensUsed} tokens</span>
                         <span>{msg.metadata.latencyMs}ms</span>
                       </>
