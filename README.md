@@ -57,6 +57,30 @@ Required vars:
 
 The app header includes a **Capabilities** indicator showing which of these are enabled at runtime.
 
+
+## Capability matrix (current)
+
+### LLM providers
+- OpenAI: supported
+- Anthropic: supported
+- Gemini: supported
+- Azure OpenAI: supported (deployment model + `api-version` handling)
+- Ollama (local): supported
+- Custom OpenAI-compatible endpoints: supported
+
+### Tools and agent capabilities
+- Skills prompt injection: enabled
+- MCP tool routing (`mcp_call`): enabled when MCP servers are configured on an agent
+- Web search tool flag: enabled in runtime pipeline
+- Code execution tool flag: enabled in runtime pipeline
+- Memory read/write (short-term + long-term summary): enabled
+- File read/file write: represented in permissions schema; full sandboxed local filesystem tooling is not yet implemented in this frontend runtime
+
+### Supabase edge function AI env
+For self-hosted usage, edge functions expect:
+- `AI_BASE_URL` (default: `https://api.openai.com/v1`)
+- `AI_API_KEY`
+
 ## Readiness audit (what can be tested without changing features)
 
 Run this audit to quickly check whether key roadmap items are in place and identify gaps before manual QA:

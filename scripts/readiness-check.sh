@@ -46,6 +46,17 @@ if contains "case 'ollama':" src/lib/llm.ts; then pass "Ollama path available"; 
 if contains "case 'azure':" src/lib/llm.ts; then pass "Azure path available"; else warn "Azure path missing"; fi
 
 # 3) MCP, tools, and file/memory features
+if contains "function callAzureOpenAI(" src/lib/llm.ts && contains "api-version=" src/lib/llm.ts; then
+  pass "Azure OpenAI uses provider-specific endpoint format (api-version + deployment)"
+else
+  warn "Azure OpenAI endpoint handling not fully wired"
+fi
+if contains "DEFAULT_MODELS_BY_PROVIDER" src/pages/AgentsPage.tsx && contains "handleProviderChange" src/pages/AgentsPage.tsx; then
+  pass "Agent editor applies sane default model when provider changes"
+else
+  warn "Agent provider/model default mapping missing"
+fi
+
 if contains "mcpServers" src/lib/llm.ts && contains "mcp_call" src/lib/llm.ts; then pass "MCP tool wiring present in agent runtime"; else warn "MCP tool wiring appears incomplete"; fi
 if contains "permissions: {" src/types/index.ts && contains "fileRead" src/types/index.ts && contains "fileWrite" src/types/index.ts && contains "codeExecution" src/types/index.ts; then
   pass "Agent permission model includes file read/write and code execution flags"

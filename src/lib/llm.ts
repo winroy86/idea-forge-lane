@@ -13,6 +13,27 @@ interface LLMResponse {
   provider: string;
 }
 
+
+
+const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-20250514',
+  gemini: 'gemini-2.0-flash',
+  azure: 'gpt-4o-mini', // deployment name on Azure
+  ollama: 'llama3.1:8b',
+  custom: 'gpt-4o-mini',
+};
+
+function getDefaultModelForProvider(provider: string): string {
+  return DEFAULT_PROVIDER_MODELS[provider] || 'gpt-4o-mini';
+}
+
+function buildOpenAICompatibleUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/$/, '');
+  if (trimmed.endsWith('/chat/completions')) return trimmed;
+  return `${trimmed}/chat/completions`;
+}
+
 function findProvider(providerType: string, baseUrl?: string): ProviderConfig | null {
   const providers = getProviders();
   // Try exact match with baseUrl first
@@ -99,7 +120,7 @@ async function callOpenAICompatible(
   history: { role: string; content: string }[],
   agent: Agent,
 ): Promise<{ content: string; usage?: { total_tokens?: number } }> {
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const url = buildOpenAICompatibleUrl(baseUrl);
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -123,6 +144,52 @@ async function callOpenAICompatible(
     const err = await res.text();
     throw new Error(`API error (${res.status}): ${err}`);
   }
+  const data = await res.json();
+  return {
+    content: data.choices?.[0]?.message?.content || 'No response',
+    usage: data.usage,
+  };
+}
+
+
+async function callAzureOpenAI(
+  apiKey: string,
+  baseUrl: string,
+  deployment: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+): Promise<{ content: string; usage?: { total_tokens?: number } }> {
+  const trimmed = baseUrl.replace(/\/$/, '');
+  const apiVersion = '2024-10-21';
+  const endpoint = trimmed.includes('/openai/deployments/')
+    ? `${trimmed}/chat/completions?api-version=${apiVersion}`
+    : `${trimmed}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify({
+      messages: [
+        { role: 'system', content: system },
+        ...history,
+      ],
+      temperature: agent.config.temperature,
+      max_tokens: agent.config.maxTokens,
+      top_p: agent.config.topP,
+      presence_penalty: agent.config.presencePenalty,
+      frequency_penalty: agent.config.frequencyPenalty,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Azure OpenAI error (${res.status}): ${err}`);
+  }
+
   const data = await res.json();
   return {
     content: data.choices?.[0]?.message?.content || 'No response',
@@ -536,8 +603,16 @@ async function callProviderRaw(
       content = result.content;
       break;
     }
+    case 'azure': {
+      const provider = findProvider('azure', agent.config.baseUrl)!;
+      const baseUrl = provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com';
+      const deployment = agent.config.model || getDefaultModelForProvider('azure');
+      const result = await callAzureOpenAI(provider.apiKey, baseUrl, deployment, system, history, agent);
+      content = result.content;
+      tokensUsed = result.usage?.total_tokens;
+      break;
+    }
     case 'openai':
-    case 'azure':
     case 'ollama':
     case 'custom':
     default: {
@@ -545,15 +620,14 @@ async function callProviderRaw(
       const baseUrl =
         agent.config.provider === 'ollama'
           ? (provider.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
-          : agent.config.provider === 'azure'
-          ? (provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT')
           : agent.config.provider === 'custom'
           ? (provider.baseUrl || agent.config.baseUrl || '')
           : 'https://api.openai.com/v1';
 
       if (!baseUrl) throw new Error('No base URL configured for custom provider.');
 
-      const result = await callOpenAICompatible(provider.apiKey, baseUrl, agent.config.model, system, history, agent);
+      const model = agent.config.model || getDefaultModelForProvider(agent.config.provider);
+      const result = await callOpenAICompatible(provider.apiKey, baseUrl, model, system, history, agent);
       content = result.content;
       tokensUsed = result.usage?.total_tokens;
       break;
@@ -599,9 +673,7 @@ export async function callSummarizer(
     const tempAgent = {
       config: {
         provider: provider.provider,
-        model: provider.provider === 'anthropic' ? 'claude-sonnet-4-20250514' :
-               provider.provider === 'gemini' ? 'gemini-2.0-flash' :
-               provider.provider === 'openai' ? 'gpt-4o-mini' : 'gpt-4o-mini',
+        model: getDefaultModelForProvider(provider.provider),
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
@@ -618,6 +690,12 @@ export async function callSummarizer(
       }
       case 'gemini': {
         const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
+        content = result.content;
+        break;
+      }
+      case 'azure': {
+        const baseUrl = provider.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com';
+        const result = await callAzureOpenAI(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
         content = result.content;
         break;
       }

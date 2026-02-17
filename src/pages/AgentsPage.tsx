@@ -47,6 +47,16 @@ const DEFAULT_CONFIG: AgentConfig = {
 };
 
 
+
+const DEFAULT_MODELS_BY_PROVIDER: Record<LLMProvider, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-20250514',
+  gemini: 'gemini-2.0-flash',
+  azure: 'gpt-4o-mini',
+  ollama: 'llama3.1:8b',
+  custom: 'gpt-4o-mini',
+};
+
 const PROVIDERS: { value: LLMProvider; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
@@ -106,6 +116,25 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const updateConfig = (patch: Partial<AgentConfig>) =>
     setForm(prev => ({ ...prev, config: { ...prev.config, ...patch } }));
 
+
+  const handleProviderChange = (provider: LLMProvider) => {
+    const nextModel = DEFAULT_MODELS_BY_PROVIDER[provider];
+    setForm(prev => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        provider,
+        model: nextModel,
+        baseUrl:
+          provider === 'ollama'
+            ? (prev.config.baseUrl || 'http://localhost:11434')
+            : provider === 'custom' || provider === 'azure'
+            ? prev.config.baseUrl
+            : undefined,
+      },
+    }));
+  };
+
   const handleSave = () => {
     if (!form.name.trim()) return;
     onSave({ ...form, updatedAt: new Date().toISOString() });
@@ -152,7 +181,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Provider</Label>
-              <Select value={form.config.provider} onValueChange={v => updateConfig({ provider: v as LLMProvider })}>
+              <Select value={form.config.provider} onValueChange={v => handleProviderChange(v as LLMProvider)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
