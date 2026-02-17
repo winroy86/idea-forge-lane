@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
@@ -774,6 +774,21 @@ export default function AgentsPage() {
                 <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   t={agent.config.temperature}
                 </span>
+                {agent.permissions?.codeExecution && (
+                  <span className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                    <Code className="h-2.5 w-2.5" /> Code
+                  </span>
+                )}
+                {agent.permissions?.webSearch && (
+                  <span className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                    <Globe className="h-2.5 w-2.5" /> Web
+                  </span>
+                )}
+                {(agent.mcpServers?.filter(s => s.enabled).length || 0) > 0 && (
+                  <span className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                    <Plug className="h-2.5 w-2.5" /> MCP ({agent.mcpServers.filter(s => s.enabled).length})
+                  </span>
+                )}
               </div>
             </div>
           ))}
