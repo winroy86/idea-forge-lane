@@ -1,7 +1,8 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
-import { getProviders } from '@/lib/store';
+import { getAppSettings, getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 
 interface LLMResponse {
   content: string;
@@ -13,26 +14,8 @@ interface LLMResponse {
   provider: string;
 }
 
-
-
-const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-4-20250514',
-  gemini: 'gemini-2.0-flash',
-  azure: 'gpt-4o-mini', // deployment name on Azure
-  ollama: 'llama3.1:8b',
-  custom: 'gpt-4o-mini',
-};
-
-function getDefaultModelForProvider(provider: string): string {
-  return DEFAULT_PROVIDER_MODELS[provider] || 'gpt-4o-mini';
-}
-
-function buildOpenAICompatibleUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/$/, '');
-  if (trimmed.endsWith('/chat/completions')) return trimmed;
-  return `${trimmed}/chat/completions`;
-}
+const backendApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const isBackendModeEnabled = backendApiBaseUrl.length > 0;
 
 function findProvider(providerType: string, baseUrl?: string): ProviderConfig | null {
   const providers = getProviders();
@@ -45,6 +28,53 @@ function findProvider(providerType: string, baseUrl?: string): ProviderConfig | 
   return providers.find(p => p.provider === providerType && p.isActive) || null;
 }
 
+
+
+async function callProviderViaEdge(
+  providerId: string | undefined,
+  provider: string,
+  model: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+  toolsEnabled?: string[],
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean; authType?: string; authToken?: string; authHeader?: string }>,
+): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+  const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      providerId,
+      provider,
+      model,
+      messages: [{ role: 'system', content: system }, ...history],
+      temperature: agent.config.temperature,
+      max_tokens: agent.config.maxTokens,
+      top_p: agent.config.topP,
+      presence_penalty: agent.config.presencePenalty,
+      frequency_penalty: agent.config.frequencyPenalty,
+      tools_enabled: toolsEnabled,
+      mcp_servers: mcpServers,
+      base_url: agent.config.baseUrl,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Provider edge error (${res.status}): ${err}`);
+  }
+
+  return await res.json();
+}
 function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext): string {
   let prompt = agent.systemPrompt || `You are ${agent.name}, a ${agent.role}.`;
   if (agent.domain) prompt += `\nYour area of expertise is: ${agent.domain}.`;
@@ -274,6 +304,122 @@ async function callGemini(
   };
 }
 
+type ToolCallRecord = { tool: string; query: string; result: string; sources: string[] };
+
+// ---- Provider-agnostic orchestration (via edge function) ----
+
+async function callOrchestratedProvider(
+  provider: Agent['config']['provider'],
+  model: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+  toolsEnabled?: string[],
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean; authType?: string; authToken?: string; authHeader?: string }>,
+): Promise<{ content: string; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number }; toolCallsMade?: ToolCallRecord[] }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Cloud provider is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
+  }
+
+  const providerConfig = provider === 'lovable' ? null : findProvider(provider, agent.config.baseUrl);
+  if (provider !== 'lovable' && !providerConfig) {
+    throw new Error(`No active provider configured for "${provider}". Go to Providers to add an API key.`);
+  }
+
+  const bodyPayload: Record<string, unknown> = {
+    provider,
+    api_key: providerConfig?.apiKey,
+    base_url: providerConfig?.baseUrl || agent.config.baseUrl,
+    model: model || 'google/gemini-3-flash-preview',
+    messages: [
+      { role: 'system', content: system },
+      ...history,
+    ],
+    temperature: agent.config.temperature,
+    max_tokens: agent.config.maxTokens,
+    top_p: agent.config.topP,
+    presence_penalty: agent.config.presencePenalty,
+    frequency_penalty: agent.config.frequencyPenalty,
+    tools_enabled: toolsEnabled,
+  };
+
+  if (mcpServers && mcpServers.length > 0) {
+    bodyPayload.mcp_servers = mcpServers;
+  }
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+  const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(bodyPayload),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    try {
+      const parsed = JSON.parse(err);
+      throw new Error(parsed.error || `Provider error (${res.status})`);
+    } catch (e) {
+      if (e instanceof Error && e.message !== `Unexpected token`) throw e;
+      throw new Error(`Provider error (${res.status}): ${err}`);
+    }
+  }
+
+  const data = await res.json();
+  return {
+    content: data.content || data.raw?.choices?.[0]?.message?.content || 'No response',
+    usage: data.usage,
+    toolCallsMade: data.toolCallsMade,
+  };
+}
+
+async function callBackendLLM(
+  agent: Agent,
+  system: string,
+  history: { role: string; content: string }[],
+): Promise<{ content: string; tokensUsed?: number }> {
+  const res = await fetch(`${backendApiBaseUrl}/api/llm/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      agent: {
+        provider: agent.config.provider,
+        model: agent.config.model,
+        baseUrl: agent.config.baseUrl,
+        config: {
+          temperature: agent.config.temperature,
+          topP: agent.config.topP,
+          maxTokens: agent.config.maxTokens,
+          presencePenalty: agent.config.presencePenalty,
+          frequencyPenalty: agent.config.frequencyPenalty,
+        },
+      },
+      model: agent.config.model,
+      prompt: history[history.length - 1]?.content || '',
+      system,
+      history,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Backend LLM error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  return {
+    content: data.content || 'No response',
+    tokensUsed: data.usage?.total_tokens,
+  };
+}
+
 // ---- Main entry point ----
 
 export interface ResearchLoopDetail {
@@ -300,9 +446,15 @@ export async function callAgent(
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
-  const provider = findProvider(agent.config.provider, agent.config.baseUrl);
-  if (!provider) {
-    throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
+  <<<<<<< codex/add-backend-inference-endpoint-for-chat
+  if (agent.config.provider !== 'lovable' && !isBackendModeEnabled) {
+  await waitForProviderHydration();
+  if (agent.config.provider !== 'lovable') {
+    >>>>>>> codex/create-prs-for-multiple-issues
+    const provider = findProvider(agent.config.provider, agent.config.baseUrl);
+    if (!provider) {
+      throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to configure a provider.`);
+    }
   }
 
   const { system, history } = buildChatMessages(agent, messages, allAgents, documents, roomId, meetingContext);
@@ -588,41 +740,30 @@ async function callProviderRaw(
   system: string,
   history: { role: string; content: string }[],
   toolsEnabled?: string[],
-): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: ToolCallRecord[] }> {
   let content = '';
   let tokensUsed: number | undefined;
-  let toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> | undefined;
+  let toolCallsMade: ToolCallRecord[] | undefined;
 
-  const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
+  if (isBackendModeEnabled && agent.config.provider !== 'lovable') {
+    const result = await callBackendLLM(agent, system, history);
+    return { content: result.content, tokensUsed: result.tokensUsed };
+  }
 
   switch (agent.config.provider) {
     case 'anthropic': {
       const provider = findProvider('anthropic')!;
-      const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
+      const result = await callAnthropic(provider.apiKey || '', agent.config.model, system, history, agent);
       content = result.content;
-      tokensUsed = result.usage
-        ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0)
-        : undefined;
+      tokensUsed = result.usage ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0) : undefined;
       break;
     }
     case 'gemini': {
       const provider = findProvider('gemini')!;
-      const result = await callGemini(provider.apiKey, agent.config.model, system, history, agent);
+      const result = await callGemini(provider.apiKey || '', agent.config.model, system, history, agent);
       content = result.content;
       break;
     }
-    case 'azure': {
-      const provider = findProvider('azure', agent.config.baseUrl)!;
-      const baseUrl = provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com';
-      const deployment = agent.config.model || getDefaultModelForProvider('azure');
-      const result = await callAzureOpenAI(provider.apiKey, baseUrl, deployment, system, history, agent);
-      content = result.content;
-      tokensUsed = result.usage?.total_tokens;
-      break;
-    }
-    case 'openai':
-    case 'ollama':
-    case 'custom':
     default: {
       const provider = findProvider(agent.config.provider, agent.config.baseUrl)!;
       const baseUrl =
@@ -631,13 +772,29 @@ async function callProviderRaw(
           : agent.config.provider === 'custom'
           ? (provider.baseUrl || agent.config.baseUrl || '')
           : 'https://api.openai.com/v1';
-
       if (!baseUrl) throw new Error('No base URL configured for custom provider.');
-
-      const model = agent.config.model || getDefaultModelForProvider(agent.config.provider);
-      const result = await callOpenAICompatible(provider.apiKey, baseUrl, model, system, history, agent);
+      const result = await callOpenAICompatible(provider.apiKey || '', baseUrl, agent.config.model, system, history, agent);
+    case 'lovable':
+    case 'anthropic':
+    case 'gemini':
+    case 'openai':
+    case 'azure':
+    case 'ollama':
+    case 'custom':
+    default: {
+      const result = await callOrchestratedProvider(
+        agent.config.provider,
+        agent.config.model,
+        system,
+        history,
+        agent,
+        toolsEnabled,
+        mcpServers.length > 0 ? mcpServers : undefined,
+      );
       content = result.content;
-      tokensUsed = result.usage?.total_tokens;
+      tokensUsed = result.usage?.total_tokens
+        ?? (result.usage ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0) : undefined);
+      toolCallsMade = result.toolCallsMade;
       break;
     }
   }
@@ -645,17 +802,35 @@ async function callProviderRaw(
   return { content, tokensUsed, toolCallsMade };
 }
 
-// ---- Summarizer (uses first available provider) ----
+// ---- Summarizer ----
+
+interface SummarizerCallOptions {
+  provider?: Agent['config']['provider'];
+  model?: string;
+  baseUrl?: string;
+}
 
 export async function callSummarizer(
   action: SummarizerAction,
   messages: Message[],
   allAgents: Agent[],
+  options?: SummarizerCallOptions,
 ): Promise<LLMResponse> {
-  const providers = getProviders().filter(p => p.isActive);
+  const appSettings = getAppSettings();
+  const configured = appSettings.summarizer;
+  const selectedProvider = options?.provider || configured.provider;
+  const selectedModel = options?.model || configured.model;
+  const selectedBaseUrl = options?.baseUrl ?? configured.baseUrl;
 
-  if (providers.length === 0) {
-    throw new Error('No active providers configured. Go to Providers to add an API key.');
+  if (!selectedProvider || !selectedModel) {
+    throw new Error('Summarizer settings are incomplete. Configure provider and model in Settings.');
+  }
+
+  if (selectedProvider !== 'lovable') {
+    const provider = findProvider(selectedProvider, selectedBaseUrl);
+    if (!provider) {
+      throw new Error(`No active provider configured for "${selectedProvider}". Go to Providers to add an API key.`);
+    }
   }
 
   const actionPrompts: Record<SummarizerAction, string> = {
@@ -672,16 +847,52 @@ export async function callSummarizer(
     return { role: 'user' as const, content: `${prefix}: ${m.content}` };
   });
 
+ <<<<<<< codex/refactor-callsummarizer-to-respect-settings
+  const summarizerAgent = {
+    id: 'summarizer',
+    name: 'Summarizer',
+    role: 'Summarizer',
+    domain: '',
+    pointOfView: '',
+    systemPrompt: '',
+    styleVoice: '',
+    colorIndex: 0,
+    memoryEnabled: false,
+    researchLoops: 0,
+    memoryScopeDefault: 'local' as const,
+    skills: [],
+    mcpServers: [],
+    permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
+    createdAt: '',
+    updatedAt: '',
+    config: {
+      provider: selectedProvider,
+      model: selectedModel,
+      baseUrl: selectedBaseUrl,
+      temperature: 0.3,
+      topP: 1,
+      maxTokens: 2048,
+      presencePenalty: 0,
+      frequencyPenalty: 0,
+    },
+  } as Agent;
+=======
   const start = performance.now();
   let content = '';
   let usedModel = '';
   let usedProvider = '';
 
-  const provider = providers[0];
+  // Try Lovable AI first
+  if (hasLovableCloud) {
+    const selected = getDefaultLlmSelection({
+      provider: 'lovable',
+      preferredModel: 'google/gemini-3-flash-preview',
+    });
+
     const tempAgent = {
       config: {
-        provider: provider.provider,
-        model: getDefaultModelForProvider(provider.provider),
+        provider: selected.provider,
+        model: selected.model,
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
@@ -689,42 +900,62 @@ export async function callSummarizer(
         frequencyPenalty: 0,
       },
     } as Agent;
+ <<<<<<< codex/refactor-tool-orchestration-architecture
+    const result = await callOrchestratedProvider('lovable', 'google/gemini-3-flash-preview', system, history, tempAgent);
+    const result = await callLovableAI(tempAgent.config.model, system, history, tempAgent);
+ >>>>>>> main
+    content = result.content;
+    usedModel = tempAgent.config.model;
+    usedProvider = selected.provider;
+  } else {
+    const provider = providers[0];
+    const selected = getDefaultLlmSelection({
+      provider: provider.provider,
+      preferredModel:
+        provider.provider === 'lovable' || provider.provider === 'gemini'
+          ? 'google/gemini-2.5-flash'
+          : undefined,
+    });
 
-    switch (provider.provider) {
-      case 'anthropic': {
-        const result = await callAnthropic(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      case 'gemini': {
-        const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      case 'azure': {
-        const baseUrl = provider.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com';
-        const result = await callAzureOpenAI(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      default: {
-        const baseUrl = provider.provider === 'ollama'
-          ? (provider.baseUrl || 'http://localhost:11434/v1')
-          : provider.provider === 'custom'
-          ? (provider.baseUrl || '')
-          : 'https://api.openai.com/v1';
-        const result = await callOpenAICompatible(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-    }
+    const tempAgent = {
+      config: {
+        provider: selected.provider,
+        model: selected.model,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+ >>>>>>> main
+
+  const start = performance.now();
+  const result = await callProviderRaw(summarizerAgent, system, history);
+
+  const tempAgent = {
+    config: {
+      provider: provider.provider,
+      model: provider.provider === 'anthropic' ? 'claude-sonnet-4-20250514' :
+             provider.provider === 'gemini' ? 'gemini-2.0-flash' :
+             provider.provider === 'openai' ? 'gpt-4o-mini' : 'gpt-4o-mini',
+      temperature: 0.3,
+      topP: 1,
+      maxTokens: 2048,
+      presencePenalty: 0,
+      frequencyPenalty: 0,
+    },
+  } as Agent;
+
+  const result = await callProviderRaw(tempAgent, system, history);
+  content = result.content;
   usedModel = tempAgent.config.model;
   usedProvider = provider.provider;
 
   return {
-    content,
+    content: result.content,
     latencyMs: Math.round(performance.now() - start),
-    model: usedModel,
-    provider: usedProvider,
+    model: selectedModel,
+    provider: selectedProvider,
   };
 }

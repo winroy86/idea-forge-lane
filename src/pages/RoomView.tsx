@@ -13,6 +13,7 @@ import {
   getMeetingSessions, saveMeetingSession, getActiveMeeting
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import ResearchProgressBar from '@/components/ResearchProgressBar';
@@ -37,8 +38,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { TID } from '@/testIds';
-import { hydrateRoomsFromServer } from '@/lib/storageAdapter';
+import { supabase } from '@/integrations/supabase/client';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -303,16 +303,18 @@ export default function RoomView() {
     }
     const base64 = btoa(binary);
 
+    const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
     const res = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         fileBase64: base64,
         fileName: file.name,
         mimeType: file.type || 'application/pdf',
+        llm,
       }),
     });
 
@@ -944,7 +946,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {msg.metadata && (
                       <>
-                        <span>{msg.metadata.model}</span>
+                        <span>{msg.metadata.provider}/{msg.metadata.model}</span>
                         <span>{msg.metadata.tokensUsed} tokens</span>
                         <span>{msg.metadata.latencyMs}ms</span>
                       </>

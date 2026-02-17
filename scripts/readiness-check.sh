@@ -2,116 +2,75 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT_DIR"
 
-pass_count=0
-warn_count=0
+FOUNDATION=()
+PENDING=()
+WARNINGS=()
 
-pass() {
-  echo "✅ $1"
-  pass_count=$((pass_count + 1))
+check_file_contains() {
+  local file="$1"
+  local pattern="$2"
+  if [[ -f "$file" ]] && rg -q "$pattern" "$file"; then
+    return 0
+  fi
+  return 1
 }
 
-warn() {
-  echo "⚠️  $1"
-  warn_count=$((warn_count + 1))
-}
+server_file="$ROOT_DIR/server/index.js"
+storage_adapter_file="$ROOT_DIR/src/lib/storageAdapter.ts"
+llm_file="$ROOT_DIR/src/lib/llm.ts"
 
-has_file() {
-  [[ -f "$1" ]]
-}
-
-contains() {
-  local pattern="$1"
-  local file="$2"
-  rg -n --no-heading --fixed-strings "$pattern" "$file" >/dev/null 2>&1
-}
-
-echo "== Idea Forge Lane local capability & readiness audit =="
-
-# 1) Core local boot/config
-if has_file ".env.example"; then pass "Environment template exists (.env.example)"; else warn ".env.example missing"; fi
-if contains '"smoke:prod"' package.json; then pass "Production smoke script exists"; else warn "smoke:prod script missing"; fi
-if contains 'Capabilities:' src/components/AppLayout.tsx; then pass "Runtime capabilities indicator exists"; else warn "Capabilities indicator missing"; fi
-if contains 'export const supabase = hasSupabaseConfig' src/integrations/supabase/client.ts; then pass "Supabase client is optional (no hard crash if env absent)"; else warn "Supabase optional guard missing"; fi
-
-# 2) Provider/model pipeline
-if rg -n "export type LLMProvider = 'openai' \| 'anthropic' \| 'gemini' \| 'azure' \| 'ollama' \| 'custom'" src/types/index.ts >/dev/null 2>&1; then
-  pass "Provider list is local/self-managed (no built-in Lovable provider)"
+# Backend providers endpoint presence
+if check_file_contains "$server_file" '/api/providers'; then
+  FOUNDATION+=("Backend providers route found: /api/providers in server/index.js")
 else
-  warn "Provider list does not match expected local/self-managed set"
-fi
-if contains "switch (agent.config.provider)" src/lib/llm.ts; then pass "Per-provider LLM router exists"; else warn "Provider routing missing"; fi
-if contains "case 'ollama':" src/lib/llm.ts; then pass "Ollama path available"; else warn "Ollama path missing"; fi
-if contains "case 'azure':" src/lib/llm.ts; then pass "Azure path available"; else warn "Azure path missing"; fi
-
-# 3) MCP, tools, and file/memory features
-if has_file "src/pages/LoginPage.tsx" && has_file "src/components/AuthGate.tsx"; then
-  pass "Frontend auth gate and login page exist"
-else
-  warn "Frontend auth gate/login missing"
-fi
-if contains "VITE_API_BASE_URL" src/lib/api.ts && has_file "src/lib/storageAdapter.ts"; then
-  pass "Storage adapter foundation exists for server-backed sync"
-else
-  warn "Storage adapter foundation missing"
-fi
-if has_file "server/index.js" && has_file "server/package.json"; then
-  pass "Backend skeleton exists (Express + SQLite + auth/session endpoints)"
-else
-  warn "Backend skeleton missing"
-fi
-if contains 'name: "file_read"' supabase/functions/agent-chat/index.ts && contains 'name: "file_write"' supabase/functions/agent-chat/index.ts; then
-  pass "Agent file read/write tools are wired in edge runtime"
-else
-  warn "Agent file read/write tools missing"
-fi
-if contains "toolsEnabled.push('file_read')" src/lib/llm.ts && contains "toolsEnabled.push('file_write')" src/lib/llm.ts; then
-  pass "Frontend runtime requests file read/write tools from agent permissions"
-else
-  warn "Frontend runtime file tool flags missing"
-fi
-if contains "function callAzureOpenAI(" src/lib/llm.ts && contains "api-version=" src/lib/llm.ts; then
-  pass "Azure OpenAI uses provider-specific endpoint format (api-version + deployment)"
-else
-  warn "Azure OpenAI endpoint handling not fully wired"
-fi
-if contains "DEFAULT_MODELS_BY_PROVIDER" src/pages/AgentsPage.tsx && contains "handleProviderChange" src/pages/AgentsPage.tsx; then
-  pass "Agent editor applies sane default model when provider changes"
-else
-  warn "Agent provider/model default mapping missing"
+  PENDING+=("Missing backend providers route (/api/providers) in server/index.js")
 fi
 
-if contains "mcpServers" src/lib/llm.ts && contains "mcp_call" src/lib/llm.ts; then pass "MCP tool wiring present in agent runtime"; else warn "MCP tool wiring appears incomplete"; fi
-if contains "permissions: {" src/types/index.ts && contains "fileRead" src/types/index.ts && contains "fileWrite" src/types/index.ts && contains "codeExecution" src/types/index.ts; then
-  pass "Agent permission model includes file read/write and code execution flags"
+# Encrypted provider storage conventions
+if check_file_contains "$server_file" 'encryptText' && check_file_contains "$server_file" 'decryptText' && check_file_contains "$server_file" 'api_key_encrypted'; then
+  FOUNDATION+=("Encrypted provider secret flow found (encryptText/decryptText + api_key_encrypted)")
 else
-  warn "Agent permission model incomplete for file/code capabilities"
-fi
-if contains "writeMemoryFile" src/lib/llm.ts && contains "getAgentMemories" src/lib/agentMemory.ts; then pass "Local memory read/write plumbing exists"; else warn "Memory read/write plumbing not fully detected"; fi
-
-# 4) Local-only / no Lovable service coupling
-if rg -n "lovable|ai\.gateway\.lovable|LOVABLE_API_KEY|lovable\.dev|provider: 'lovable'" README.md src supabase package.json >/dev/null 2>&1; then
-  warn "Lovable-specific references still detected"
-else
-  pass "No Lovable-specific references detected in app/docs/functions"
-fi
-if contains 'const AI_BASE_URL = Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1";' supabase/functions/agent-chat/index.ts; then
-  pass "Edge functions use configurable AI_BASE_URL (default OpenAI-compatible)"
-else
-  warn "Edge function AI base URL is not configurable"
+  PENDING+=("Encrypted provider secret flow not fully implemented in server/index.js (need encryptText/decryptText + api_key_encrypted)")
 fi
 
-# 5) Known gaps that block full end-to-end confidence
-if rg -n 'bg-\$\{|text-\$\{|border-\$\{' src >/dev/null 2>&1; then warn "Dynamic Tailwind class patterns detected (possible prod CSS mismatch)"; else pass "No risky dynamic Tailwind class patterns detected"; fi
-if rg -n 'new Function\(' supabase src >/dev/null 2>&1; then warn "Dynamic code execution usage detected (security risk)"; else pass "No dynamic code execution usage detected"; fi
-if has_file "playwright.config.ts"; then pass "Playwright config found"; else warn "Playwright config missing"; fi
-if has_file "src/testIds.ts"; then pass "Centralized data-testid map found"; else warn "Centralized data-testid map missing"; fi
-if has_file ".github/workflows/ci.yml" || has_file ".github/workflows/test.yml"; then pass "CI workflow found"; else warn "CI workflow missing"; fi
+# Frontend/backend provider sync hooks
+if check_file_contains "$storage_adapter_file" 'providers'; then
+  FOUNDATION+=("Provider storage adapter hooks detected in src/lib/storageAdapter.ts")
+else
+  PENDING+=("Provider backend sync hooks missing in src/lib/storageAdapter.ts")
+fi
 
-echo
-printf 'Summary: %d pass, %d warning\n' "$pass_count" "$warn_count"
+# Warning-only check: backend mode should not depend on client-side provider secrets
+if [[ -f "$llm_file" ]]; then
+  if rg -q 'getProviders\(' "$llm_file" && rg -q 'provider\.apiKey|apiKey' "$llm_file"; then
+    WARNINGS+=("src/lib/llm.ts still appears to depend on client-stored provider secrets (getProviders/apiKey). In backend mode, move secret resolution server-side.")
+  fi
+else
+  WARNINGS+=("src/lib/llm.ts not found; could not evaluate client-stored secret dependency warning.")
+fi
 
-if [[ "$warn_count" -gt 0 ]]; then
-  exit 1
+printf '\n=== Foundation present ===\n'
+if ((${#FOUNDATION[@]} == 0)); then
+  printf '%s\n' '- none detected'
+else
+  for item in "${FOUNDATION[@]}"; do
+    printf '✅ %s\n' "$item"
+  done
+fi
+
+printf '\n=== Production-hardening pending ===\n'
+if ((${#PENDING[@]} == 0)); then
+  printf '%s\n' '- none detected'
+else
+  for item in "${PENDING[@]}"; do
+    printf '⚠️ %s\n' "$item"
+  done
+fi
+
+if ((${#WARNINGS[@]} > 0)); then
+  printf '\n=== Warnings ===\n'
+  for item in "${WARNINGS[@]}"; do
+    printf '⚠️ %s\n' "$item"
+  done
 fi

@@ -3,19 +3,87 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
+import { getAppSettings, saveAppSettings } from '@/lib/store';
+import { LLMProvider } from '@/types';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function SettingsPage() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [password, setPassword] = useState('');
+  const [summarizerSettings, setSummarizerSettings] = useState(() => getAppSettings().summarizer);
   const { toast } = useToast();
+
+
+  const updateSummarizerSetting = (patch: Partial<typeof summarizerSettings>) => {
+    const next = { ...summarizerSettings, ...patch };
+    setSummarizerSettings(next);
+    saveAppSettings({ ...getAppSettings(), summarizer: next });
+  };
 
   const handleClearData = () => {
     if (confirm('This will delete ALL rooms, agents, messages, and provider settings. Continue?')) {
       localStorage.clear();
       toast({ title: 'All data cleared' });
       window.location.reload();
+    }
+  };
+
+  const handleAuthenticate = async () => {
+    if (!password.trim()) {
+      toast({ title: 'Password required', description: 'Enter your current password to authenticate this session.', variant: 'destructive' });
+      return;
+    }
+
+    setAuthenticating(true);
+    try {
+      const response = await apiFetch<{ sessionToken: string; success: boolean }>('/api/settings/auth/session', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      });
+      localStorage.setItem(AUTH_SESSION_KEY, response.sessionToken);
+      setSessionActive(true);
+      toast({ title: 'Authenticated', description: 'Session authenticated for sensitive settings updates.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Authentication failed.';
+      toast({ title: 'Authentication failed', description: message, variant: 'destructive' });
+    } finally {
+      setAuthenticating(false);
+    }
+  };
+
+  const handleSaveAuth = async () => {
+    setSaving(true);
+    try {
+      const response = await apiFetch<SaveAuthResponse>('/api/settings/auth', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          enabled: authEnabled,
+          password: password.trim() || undefined,
+        }),
+      });
+
+      if (response.sessionToken) {
+        localStorage.setItem(AUTH_SESSION_KEY, response.sessionToken);
+      }
+
+      if (!response.enabled) {
+        localStorage.removeItem(AUTH_SESSION_KEY);
+      }
+
+      setAuthEnabled(response.enabled);
+      setHasPassword(response.hasPassword);
+      setSessionActive(response.enabled ? true : false);
+      setPassword('');
+      toast({ title: 'Authentication settings saved', description: response.message });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save authentication settings.';
+      toast({ title: 'Failed to save auth settings', description: message, variant: 'destructive' });
+      await fetchAuthConfig();
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -33,12 +101,21 @@ export default function SettingsPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label className="text-sm">Require password</Label>
-              <Switch checked={authEnabled} onCheckedChange={setAuthEnabled} />
+              <Switch checked={authEnabled} onCheckedChange={setAuthEnabled} disabled={loadingAuth || saving} />
             </div>
             {authEnabled && (
               <div>
                 <Label className="text-xs text-muted-foreground">Admin Password</Label>
-                <Input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Set admin password" />
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder={hasPassword ? 'Enter new or current admin password' : 'Set admin password'}
+                  disabled={loadingAuth || saving || authenticating}
+                />
+                <p className="text-xs text-muted-foreground mt-2">
+                  Password must be at least 10 characters with upper/lowercase letters, numbers, and symbols.
+                </p>
               </div>
             )}
             {!authEnabled && (
@@ -46,6 +123,48 @@ export default function SettingsPage() {
                 ⚠️ No authentication is configured. Anyone on your network can access this app.
               </p>
             )}
+            {authEnabled && hasPassword && !sessionActive && (
+              <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700 space-y-2">
+                <p>This session is not authenticated. Authenticate before updating or disabling auth settings.</p>
+                <Button size="sm" variant="secondary" onClick={handleAuthenticate} disabled={authenticating || saving || loadingAuth}>
+                  {authenticating ? 'Authenticating...' : 'Authenticate Session'}
+                </Button>
+              </div>
+            )}
+            <Button onClick={handleSaveAuth} disabled={loadingAuth || saving || authenticating} size="sm">
+              {saving ? 'Saving...' : 'Save Authentication Settings'}
+            </Button>
+          </div>
+        </div>
+
+
+        {/* Summarizer */}
+        <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Summarizer</h2>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Provider</Label>
+              <Select value={summarizerSettings.provider} onValueChange={(value) => updateSummarizerSetting({ provider: value as LLMProvider })}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="lovable">Lovable AI</SelectItem>
+                  <SelectItem value="openai">OpenAI</SelectItem>
+                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="gemini">Gemini</SelectItem>
+                  <SelectItem value="azure">Azure OpenAI</SelectItem>
+                  <SelectItem value="ollama">Ollama</SelectItem>
+                  <SelectItem value="custom">Custom OpenAI-compatible</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Model</Label>
+              <Input className="mt-1" value={summarizerSettings.model} onChange={e => updateSummarizerSetting({ model: e.target.value })} placeholder="e.g. gpt-4o-mini" />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Base URL (optional)</Label>
+              <Input className="mt-1" value={summarizerSettings.baseUrl || ''} onChange={e => updateSummarizerSetting({ baseUrl: e.target.value || undefined })} placeholder="Needed for custom/azure/ollama as applicable" />
+            </div>
           </div>
         </div>
 
@@ -57,7 +176,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              All data is currently stored in your browser's localStorage. In the Docker deployment, data will be persisted to a mounted volume at <code className="font-mono bg-muted px-1 rounded">/data</code>.
+              Most app data is currently stored in your browser's localStorage. Provider API secrets are server-side by default unless Local-dev mode is enabled.
             </p>
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               Clear All Data
