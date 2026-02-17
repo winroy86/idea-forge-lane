@@ -4,6 +4,7 @@ import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
+import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -664,6 +665,7 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [editAgent, setEditAgent] = useState<Agent | null | undefined>(undefined);
   const [showGenerator, setShowGenerator] = useState(false);
+  const [memoryPanelAgent, setMemoryPanelAgent] = useState<Agent | null>(null);
   const { toast } = useToast();
 
   const refresh = () => setAgents(getAgents());
@@ -794,11 +796,15 @@ export default function AgentsPage() {
                   const allMem = getAgentMemories(agent.id);
                   const st = allMem.filter(f => f.category === 'short-term' || f.category === 'research' || f.category === 'scratch').length;
                   const lt = allMem.filter(f => f.category === 'long-term' || f.category === 'task').length;
-                  if (st === 0 && lt === 0) return null;
                   return (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                      <Brain className="h-2.5 w-2.5" /> {st}s / {lt}l
-                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setMemoryPanelAgent(agent); }}
+                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                        st + lt > 0 ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                      }`}
+                    >
+                      <Brain className="h-2.5 w-2.5" /> {st + lt > 0 ? `${st}s / ${lt}l` : 'Memory'}
+                    </button>
                   );
                 })()}
               </div>
@@ -825,6 +831,15 @@ export default function AgentsPage() {
           />
         )}
       </Dialog>
+
+      {/* Memory Panel */}
+      {memoryPanelAgent && (
+        <AgentMemoryPanel
+          agentId={memoryPanelAgent.id}
+          agentName={memoryPanelAgent.name}
+          onClose={() => { setMemoryPanelAgent(null); refresh(); }}
+        />
+      )}
     </div>
   );
 }
