@@ -2,6 +2,7 @@ import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlo
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 
 interface LLMResponse {
   content: string;
@@ -667,10 +668,15 @@ export async function callSummarizer(
 
   // Try Lovable AI first
   if (hasLovableCloud) {
+    const selected = getDefaultLlmSelection({
+      provider: 'lovable',
+      preferredModel: 'google/gemini-3-flash-preview',
+    });
+
     const tempAgent = {
       config: {
-        provider: 'lovable' as const,
-        model: 'google/gemini-3-flash-preview',
+        provider: selected.provider,
+        model: selected.model,
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
@@ -678,18 +684,24 @@ export async function callSummarizer(
         frequencyPenalty: 0,
       },
     } as Agent;
-    const result = await callLovableAI('google/gemini-3-flash-preview', system, history, tempAgent);
+    const result = await callLovableAI(tempAgent.config.model, system, history, tempAgent);
     content = result.content;
-    usedModel = 'google/gemini-3-flash-preview';
-    usedProvider = 'lovable';
+    usedModel = tempAgent.config.model;
+    usedProvider = selected.provider;
   } else {
     const provider = providers[0];
+    const selected = getDefaultLlmSelection({
+      provider: provider.provider,
+      preferredModel:
+        provider.provider === 'lovable' || provider.provider === 'gemini'
+          ? 'google/gemini-2.5-flash'
+          : undefined,
+    });
+
     const tempAgent = {
       config: {
-        provider: provider.provider,
-        model: provider.provider === 'anthropic' ? 'claude-sonnet-4-20250514' :
-               provider.provider === 'gemini' ? 'gemini-2.0-flash' :
-               provider.provider === 'openai' ? 'gpt-4o-mini' : 'gpt-4o-mini',
+        provider: selected.provider,
+        model: selected.model,
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
