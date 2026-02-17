@@ -1,142 +1,121 @@
 
 
-# Timed Meeting Sessions for Rooms
+## Skills System Implementation
 
-## Overview
+This plan adds a Claude-like skill system where skills are structured workflow manifests that agents can load and execute using their existing capabilities (code execution, memory, web search, MCP tools).
 
-Add a "Meeting Mode" to rooms that lets you schedule timed conversations with a start time, duration, topic, goals, and attached documents. Agents will be time-aware throughout the session and will automatically deliver closing summaries 5 minutes before the meeting ends. Rooms can be triggered for multiple meetings, each stored as a separate session.
+### Core Concept
 
----
+A **Skill** is a JSON manifest that defines:
+- What the skill does (name, description, trigger conditions)
+- What tools/permissions it requires
+- A step-by-step workflow the agent follows during its inner reasoning
+- Input/output schemas
 
-## Data Model Changes (`src/types/index.ts`)
+Agents don't need new capabilities -- skills are injected into the agent's system prompt when relevant, and the agent uses its existing tools (code execution, memory, web search, file read/write via memory) to follow the workflow. The inner thoughts phase is where the agent plans and executes skill steps.
 
-Add a `MeetingSession` interface and extend `Room` with meeting configuration:
+### What Changes
+
+**1. New types (`src/types/index.ts`)**
+
+Add `Skill` and `SkillStep` interfaces:
 
 ```text
-MeetingSession {
-  id: string
-  roomId: string
-  topic: string
-  goals: string
-  additionalInfo: string
-  documents: RoomDocument[]
-  startTime: string (ISO)
-  durationMinutes: number
-  status: 'scheduled' | 'active' | 'wrap-up' | 'ended'
-  createdAt: string
+SkillStep {
+  id, instruction, toolHint (optional: 'code_execution' | 'web_search' | 'memory_write' | 'mcp_call'),
+  outputKey (optional: name to store result for later steps)
 }
 
-Room (extended fields):
-  meetings: MeetingSession[]  // history of all sessions
-  activeMeetingId?: string    // currently running session
+Skill {
+  id, name, description, version, author,
+  icon (emoji), category,
+  triggers: string[] (keywords/phrases that activate this skill),
+  requiredPermissions: ('webSearch' | 'codeExecution' | 'fileRead' | 'fileWrite')[],
+  inputSchema: { name, type, description, required }[],
+  steps: SkillStep[],
+  outputFormat: string (markdown template),
+  installedAt: string
+}
 ```
 
+**2. Skill store (`src/lib/skillStore.ts`)**
+
+localStorage-based CRUD for skills, plus:
+- `getSkills()`, `getSkill(id)`, `upsertSkill()`, `deleteSkill()`
+- `getAgentSkills(agent)` -- returns full Skill objects for an agent's `skills: string[]` array
+- `importSkillFromJSON(json)` -- parse and validate a skill manifest
+- A set of **built-in starter skills** bundled as defaults (e.g., "Deep Research", "Code Analyzer", "Fact Checker", "SWOT Analysis")
+
+**3. Skills Page UI (`src/pages/SkillsPage.tsx`)**
+
+Replace the "Coming Soon" placeholder with:
+- Grid of installed skills (icon, name, description, category, required permissions badge)
+- "Install Skill" button opening a dialog with options:
+  - Paste JSON manifest
+  - Load from URL
+- Skill detail view (click to expand: see steps, input schema, output format)
+- Delete button per skill
+- "Starter Skills" section with one-click install for built-in templates
+
+**4. Agent editor skill assignment (`src/pages/AgentsPage.tsx`)**
+
+In the agent editor's Advanced Settings section, add:
+- A multi-select checklist of installed skills
+- Each skill shows an icon + name + required permissions warning if the agent lacks them
+- Selecting a skill adds its ID to `agent.skills[]`
+
+**5. Skill injection into agent reasoning (`src/lib/llm.ts`)**
+
+In `buildSystemMessage()`:
+- Look up the agent's assigned skills via `getAgentSkills(agent)`
+- For each skill, check if any trigger keywords appear in the latest user message
+- If triggered (or if the agent has the skill and the context is relevant), append a structured "AVAILABLE SKILLS" block to the system prompt:
+
+```text
+--- AVAILABLE SKILLS ---
+[Skill: Deep Research]
+Triggers: "research", "investigate", "deep dive"
+Steps:
+  1. Define research questions (use memory to store plan)
+  2. Search for information (use web_search)
+  3. Analyze and cross-reference findings (use code_execution if needed)
+  4. Write consolidated report to memory
+Output: ## Research Report ...
 ---
+```
 
-## Storage (`src/lib/store.ts`)
+The agent's inner thinking phase naturally picks up these instructions and follows them. No changes to the edge function are needed -- the agent already has code execution, web search, and memory tools.
 
-- Add `getMeetingSessions(roomId)` and `saveMeetingSession(session)` helpers using localStorage (key: `br_meetings`).
-- Add `getActiveMeeting(roomId)` convenience function.
+**6. Built-in Starter Skills**
 
----
+Four pre-packaged skills:
 
-## Meeting Setup UI (`src/pages/RoomView.tsx`)
+- **Deep Research**: Multi-step web search, cross-reference, synthesize findings
+- **Code Analyzer**: Read code from documents, analyze patterns, suggest improvements
+- **Fact Checker**: Verify claims using web search, rate confidence
+- **SWOT Analysis**: Structured strengths/weaknesses/opportunities/threats framework
 
-Add a "Start Meeting" button in the room header that opens a dialog with:
+### Technical Details
 
-- **Topic** (text input) -- pre-filled from room title
-- **Goals** (textarea) -- pre-filled from room goal
-- **Additional Information** (textarea) -- free-form context
-- **Start Time** -- date/time picker (default: "now")
-- **Duration** -- select dropdown (15, 30, 45, 60, 90, 120 min)
-- **Documents** -- file upload area (reuses existing upload logic)
+**File changes:**
 
-The dialog creates a `MeetingSession`, stores it, and sets it as `activeMeetingId` on the room. Previous meetings remain accessible in a "Past Meetings" section.
+| File | Change |
+|------|--------|
+| `src/types/index.ts` | Add `Skill`, `SkillStep` interfaces |
+| `src/lib/skillStore.ts` | New file -- skill CRUD + built-in skills + import |
+| `src/pages/SkillsPage.tsx` | Full rewrite -- skill grid, install dialog, detail view |
+| `src/pages/AgentsPage.tsx` | Add skill assignment multi-select in agent editor |
+| `src/lib/llm.ts` | Inject active skills into `buildSystemMessage()` |
 
----
+**No edge function changes needed** -- skills are prompt-level workflows that use existing tool infrastructure.
 
-## Meeting Timer & Status Bar (`src/pages/RoomView.tsx`)
+**No database changes needed** -- skills stored in localStorage alongside agents and rooms.
 
-When a meeting is active, display a persistent timer bar below the room header showing:
+### Why This Works Simply
 
-- Meeting topic
-- Elapsed time / total duration (e.g., "23:45 / 60:00")
-- Time remaining with color coding:
-  - Green: > 10 minutes left
-  - Yellow: 5-10 minutes left
-  - Red: < 5 minutes left (wrap-up phase)
-- A "End Meeting" button
-
-Use a `useEffect` with a 1-second interval to update the timer. When remaining time hits 5 minutes, set meeting status to `wrap-up`.
-
----
-
-## Time-Aware Agent Prompts (`src/lib/llm.ts`)
-
-Modify `buildSystemMessage` and `callAgent` to accept an optional meeting context:
-
-- Inject meeting metadata into the system prompt:
-  ```
-  --- MEETING CONTEXT ---
-  Topic: [topic]
-  Goals: [goals]
-  Additional Info: [additionalInfo]
-  Time Remaining: [X] minutes of [Y] total
-  Phase: [active / wrap-up]
-  --- END MEETING CONTEXT ---
-  ```
-
-- During **active phase**: append instruction like "You have [X] minutes remaining. Structure your arguments accordingly -- be thorough but mindful of time."
-
-- During **wrap-up phase** (last 5 minutes): append instruction like "The meeting ends in [X] minutes. Focus on summarizing your position and key takeaways rather than introducing new arguments."
-
-The `callAgent` function signature will accept an optional `meetingContext` parameter, and `RoomView` will compute and pass it on each agent call.
-
----
-
-## Auto-Summary at Wrap-Up (`src/pages/RoomView.tsx`)
-
-When the timer enters wrap-up phase (5 min remaining):
-
-1. Insert a system message: "Meeting entering final phase -- 5 minutes remaining. Each agent will now summarize their position."
-2. Automatically trigger each agent in sequence to deliver a closing summary. The prompt override for this final round:
-   ```
-   The meeting is ending. Provide your CLOSING SUMMARY:
-   1. Your key position and conclusions on the topic
-   2. Points of agreement/disagreement with other agents
-   3. Recommended next steps from your perspective
-   
-   Draw on your persona, expertise, and memory. Be concise -- this is your final statement.
-   ```
-3. After all agents have summarized, insert a system message: "Meeting ended" and set meeting status to `ended`.
-
----
-
-## Re-Triggering Rooms (Multiple Sessions)
-
-- The "Start Meeting" button is always available (not disabled after one meeting).
-- Each meeting creates a new `MeetingSession` with its own ID.
-- A "Past Meetings" collapsible section in the right panel shows previous sessions with their topic, date, duration, and status.
-- Clicking a past meeting could scroll to or filter messages from that session's timeframe (messages have timestamps that can be matched).
-
----
-
-## Technical Details
-
-### Files to Create
-- None (all changes fit in existing files)
-
-### Files to Modify
-1. **`src/types/index.ts`** -- Add `MeetingSession` interface, extend `Room`
-2. **`src/lib/store.ts`** -- Add meeting session storage helpers
-3. **`src/pages/RoomView.tsx`** -- Meeting setup dialog, timer bar, wrap-up auto-trigger logic, past meetings panel
-4. **`src/lib/llm.ts`** -- Accept and inject meeting context into agent system prompts
-5. **`src/pages/Dashboard.tsx`** -- Show active meeting indicator on room cards
-
-### Key Implementation Considerations
-- Timer uses `setInterval(1000)` with cleanup in `useEffect` return
-- Meeting context is computed fresh before each `callAgent` call so time remaining is accurate
-- Wrap-up auto-summary runs agents sequentially (reusing `triggerAgent` logic) with a modified prompt
-- Documents attached during meeting setup are merged into the room's document list
-- All meeting data persists in localStorage following existing patterns
+- Skills are "structured prompt injection" -- the agent's LLM already knows how to follow step-by-step instructions
+- The inner thoughts phase is where skill execution happens naturally
+- Research loops amplify skill effectiveness (more steps = more thorough skill execution)
+- Memory system stores intermediate skill results between steps
+- Existing permissions gate what tools a skill can actually use
 
