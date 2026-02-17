@@ -63,6 +63,20 @@ Required vars:
 
 The app header includes a **Capabilities** indicator showing which of these are enabled at runtime.
 
+## Readiness audit (what can be tested without changing features)
+
+Run this audit to quickly check whether key roadmap items are in place and identify gaps before manual QA:
+
+```sh
+npm run check:readiness
+```
+
+The script reports:
+- implemented readiness signals (✅)
+- missing/high-risk areas that still need work (⚠️)
+
+It is read-only and does not disable or remove any functionality.
+
 ## Production smoke boot
 
 Validate production boot locally:
