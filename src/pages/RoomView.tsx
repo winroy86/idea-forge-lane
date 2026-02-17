@@ -892,7 +892,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                 <div className={`animate-fade-in ${isUser ? 'flex justify-end' : ''}`}>
                 <div className={`max-w-[85%] rounded-lg px-3 py-2.5 text-sm ${
                   isUser
-                    ? 'bg-secondary text-white ml-auto'
+                    ? 'bg-secondary text-secondary-foreground ml-auto'
                     : isSystem
                     ? 'bg-muted/60 border border-dashed border-muted-foreground/30 text-center mx-auto'
                     : isSummarizer
@@ -921,7 +921,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                       <span className="font-medium text-xs">Summarizer</span>
                     </div>
                   )}
-                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground">
+                  <div className={`prose prose-sm max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground ${isUser ? 'prose-invert' : 'dark:prose-invert'}`}>
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                   {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
@@ -930,13 +930,16 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   {msg.innerThoughts && agent && (
                     <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
-                  {msg.metadata && (
-                    <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
-                      <span>{msg.metadata.model}</span>
-                      <span>{msg.metadata.tokensUsed} tokens</span>
-                      <span>{msg.metadata.latencyMs}ms</span>
-                    </div>
-                  )}
+                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
+                    <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {msg.metadata && (
+                      <>
+                        <span>{msg.metadata.model}</span>
+                        <span>{msg.metadata.tokensUsed} tokens</span>
+                        <span>{msg.metadata.latencyMs}ms</span>
+                      </>
+                    )}
+                  </div>
                 </div>
                 </div>
                 {/* Processing indicator after the last user message */}
