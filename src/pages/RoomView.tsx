@@ -797,14 +797,18 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
               )}
             </div>
           )}
-          {messages.map((msg) => {
+          {messages.map((msg, msgIdx) => {
             const agent = msg.agentId ? allAgents.find(a => a.id === msg.agentId) : null;
             const isSummarizer = msg.role === 'summarizer';
             const isUser = msg.role === 'user';
             const isSystem = msg.role === 'system';
+            // Show processing indicator after the last user message if an agent is loading
+            const isLastUserMsg = isUser && msgIdx === messages.length - 1 || (isUser && messages.slice(msgIdx + 1).every(m => m.role === 'user'));
+            const showProcessing = isUser && loadingAgentId && msgIdx === [...messages].reverse().findIndex(m => m.role === 'user');
 
             return (
-              <div key={msg.id} className={`animate-fade-in ${isUser ? 'flex justify-end' : ''}`}>
+              <div key={msg.id}>
+                <div className={`animate-fade-in ${isUser ? 'flex justify-end' : ''}`}>
                 <div className={`max-w-[85%] rounded-lg px-3 py-2.5 text-sm ${
                   isUser
                     ? 'bg-primary text-primary-foreground ml-auto'
@@ -846,6 +850,25 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     </div>
                   )}
                 </div>
+                </div>
+                {/* Processing indicator after the last user message */}
+                {isUser && loadingAgentId && msgIdx === messages.map((m, i) => m.role === 'user' ? i : -1).filter(i => i >= 0).pop() && (
+                  <div className="flex justify-end mt-1.5 animate-fade-in">
+                    <div className="flex items-center gap-2 rounded-lg bg-muted/60 border border-border px-3 py-1.5 text-xs text-muted-foreground">
+                      <div className="flex gap-0.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '0ms' }} />
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '150ms' }} />
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '300ms' }} />
+                      </div>
+                      <span>
+                        {(() => {
+                          const loadingAgent = allAgents.find(a => a.id === loadingAgentId);
+                          return loadingAgent ? `${loadingAgent.name} is thinking…` : 'Processing…';
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
