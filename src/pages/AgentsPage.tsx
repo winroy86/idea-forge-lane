@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
+import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -789,6 +790,17 @@ export default function AgentsPage() {
                     <Plug className="h-2.5 w-2.5" /> MCP ({agent.mcpServers.filter(s => s.enabled).length})
                   </span>
                 )}
+                {agent.memoryEnabled && (() => {
+                  const allMem = getAgentMemories(agent.id);
+                  const st = allMem.filter(f => f.category === 'short-term' || f.category === 'research' || f.category === 'scratch').length;
+                  const lt = allMem.filter(f => f.category === 'long-term' || f.category === 'task').length;
+                  if (st === 0 && lt === 0) return null;
+                  return (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      <Brain className="h-2.5 w-2.5" /> {st}s / {lt}l
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           ))}
