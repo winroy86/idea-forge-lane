@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Send, Plus, Play, Pause, SkipForward,
   ListOrdered, RotateCcw, Sparkles, FileText, CheckSquare,
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
-  Upload, Eye, EyeOff, Paperclip, Trash2, Database
+  Upload, Eye, EyeOff, Paperclip, Trash2, Database, Timer, Clock, Square
 } from 'lucide-react';
-import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument, CodeBlockMeta } from '@/types';
+import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
 import {
-  getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId
+  getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId,
+  getMeetingSessions, saveMeetingSession, getActiveMeeting
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getAgentMemories } from '@/lib/agentMemory';
@@ -28,6 +29,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -66,6 +75,12 @@ function InnerThoughtsBlock({ thoughts, agentName, codeBlocks }: { thoughts: str
   );
 }
 
+function formatTime(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
 export default function RoomView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -88,23 +103,97 @@ export default function RoomView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
+  // Meeting state
+  const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
+  const [meetingTopic, setMeetingTopic] = useState('');
+  const [meetingGoals, setMeetingGoals] = useState('');
+  const [meetingAdditionalInfo, setMeetingAdditionalInfo] = useState('');
+  const [meetingDuration, setMeetingDuration] = useState('30');
+  const [activeMeeting, setActiveMeeting] = useState<MeetingSession | null>(null);
+  const [timeRemaining, setTimeRemaining] = useState(0); // seconds
+  const [showPastMeetings, setShowPastMeetings] = useState(false);
+  const wrapUpTriggeredRef = useRef(false);
+
   useEffect(() => {
     if (!id) return;
     const r = getRoom(id);
     if (!r) { navigate('/'); return; }
-    // Migrate old rooms without documents
+    // Migrate old rooms
     if (!r.documents) r.documents = [];
+    if (!r.meetings) r.meetings = [];
     setRoom(r);
     setAllAgents(getAgents());
     setMessages(getMessages(id));
+    // Restore active meeting
+    const active = getActiveMeeting(id);
+    if (active && (active.status === 'active' || active.status === 'wrap-up')) {
+      setActiveMeeting(active);
+      wrapUpTriggeredRef.current = active.status === 'wrap-up';
+    }
   }, [id, navigate]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Meeting timer
+  useEffect(() => {
+    if (!activeMeeting || activeMeeting.status === 'ended') return;
+
+    const interval = setInterval(() => {
+      const start = new Date(activeMeeting.startTime).getTime();
+      const end = start + activeMeeting.durationMinutes * 60 * 1000;
+      const now = Date.now();
+      const remaining = Math.max(0, Math.floor((end - now) / 1000));
+      setTimeRemaining(remaining);
+
+      // Check if we need to transition to wrap-up
+      if (remaining <= 300 && remaining > 0 && activeMeeting.status === 'active') {
+        const updated = { ...activeMeeting, status: 'wrap-up' as const };
+        saveMeetingSession(updated);
+        setActiveMeeting(updated);
+      }
+
+      // Meeting ended
+      if (remaining <= 0) {
+        const updated = { ...activeMeeting, status: 'ended' as const };
+        saveMeetingSession(updated);
+        setActiveMeeting(updated);
+        if (room) {
+          const roomUpdated = { ...room, activeMeetingId: undefined, updatedAt: new Date().toISOString() };
+          upsertRoom(roomUpdated);
+          setRoom(roomUpdated);
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeMeeting, room]);
+
+  // Auto wrap-up summaries trigger
+  useEffect(() => {
+    if (!activeMeeting || activeMeeting.status !== 'wrap-up' || wrapUpTriggeredRef.current || loadingAgentId) return;
+    wrapUpTriggeredRef.current = true;
+    triggerWrapUpSummaries();
+  }, [activeMeeting?.status, loadingAgentId]);
+
   const roomAgents = allAgents.filter(a => room?.agentIds.includes(a.id));
   const availableAgents = allAgents.filter(a => !room?.agentIds.includes(a.id));
+
+  const getMeetingContextNow = useCallback((): MeetingContext | undefined => {
+    if (!activeMeeting || activeMeeting.status === 'ended') return undefined;
+    const start = new Date(activeMeeting.startTime).getTime();
+    const end = start + activeMeeting.durationMinutes * 60 * 1000;
+    const remaining = Math.max(0, (end - Date.now()) / 60000);
+    return {
+      topic: activeMeeting.topic,
+      goals: activeMeeting.goals,
+      additionalInfo: activeMeeting.additionalInfo,
+      timeRemainingMinutes: remaining,
+      totalDurationMinutes: activeMeeting.durationMinutes,
+      phase: activeMeeting.status === 'wrap-up' ? 'wrap-up' : 'active',
+    };
+  }, [activeMeeting]);
 
   const addAgentToRoom = (agentId: string) => {
     if (!room) return;
@@ -176,7 +265,6 @@ export default function RoomView() {
         if (isTextFile(file.name)) {
           content = await file.text();
         } else {
-          // Use AI extraction for PDFs, DOCX, images, etc.
           toast({ title: `🔍 Extracting text from ${file.name}…`, description: 'Using AI to read document content' });
           content = await extractWithAI(file);
         }
@@ -239,16 +327,32 @@ export default function RoomView() {
     }
   };
 
-  const triggerAgent = async (agentId: string) => {
+  const triggerAgent = async (agentId: string, promptOverride?: string) => {
     const agent = allAgents.find(a => a.id === agentId);
     if (!agent || !room || loadingAgentId) return;
 
     setLoadingAgentId(agentId);
     setLoopProgress(null);
     try {
-      const result = await callAgent(agent, messages, allAgents, room.documents || [], room.id, (progress) => {
+      const meetingCtx = getMeetingContextNow();
+
+      // If there's a prompt override (e.g. wrap-up), inject as a user message temporarily
+      let messagesForCall = messages;
+      if (promptOverride) {
+        const overrideMsg: Message = {
+          id: 'temp-override',
+          roomId: room.id,
+          agentId: null,
+          role: 'user',
+          content: promptOverride,
+          timestamp: new Date().toISOString(),
+        };
+        messagesForCall = [...messages, overrideMsg];
+      }
+
+      const result = await callAgent(agent, messagesForCall, allAgents, room.documents || [], room.id, (progress) => {
         setLoopProgress(progress);
-      });
+      }, meetingCtx);
       const msg: Message = {
         id: generateId(),
         roomId: room.id,
@@ -278,6 +382,106 @@ export default function RoomView() {
       setLoadingAgentId(null);
       setLoopProgress(null);
     }
+  };
+
+  const triggerWrapUpSummaries = async () => {
+    if (!room) return;
+    // Insert system message
+    const sysMsg: Message = {
+      id: generateId(),
+      roomId: room.id,
+      agentId: null,
+      role: 'system',
+      content: '⏰ **Meeting entering final phase — 5 minutes remaining.** Each agent will now summarize their position.',
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(sysMsg);
+    setMessages(prev => [...prev, sysMsg]);
+
+    const wrapUpPrompt = `The meeting is ending. Provide your CLOSING SUMMARY:
+1. Your key position and conclusions on the topic
+2. Points of agreement/disagreement with other agents
+3. Recommended next steps from your perspective
+
+Draw on your persona, expertise, and memory. Be concise — this is your final statement.`;
+
+    // Trigger each agent sequentially
+    for (const agent of roomAgents) {
+      await triggerAgent(agent.id, wrapUpPrompt);
+    }
+
+    // Insert meeting ended message
+    const endMsg: Message = {
+      id: generateId(),
+      roomId: room.id,
+      agentId: null,
+      role: 'system',
+      content: '✅ **Meeting ended.** All agents have delivered their closing summaries.',
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(endMsg);
+    setMessages(prev => [...prev, endMsg]);
+  };
+
+  const startMeeting = () => {
+    if (!room) return;
+    const session: MeetingSession = {
+      id: generateId(),
+      roomId: room.id,
+      topic: meetingTopic || room.title,
+      goals: meetingGoals || room.goal,
+      additionalInfo: meetingAdditionalInfo,
+      documents: room.documents || [],
+      startTime: new Date().toISOString(),
+      durationMinutes: Number(meetingDuration),
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    saveMeetingSession(session);
+    const updated = {
+      ...room,
+      meetings: [...(room.meetings || []), session],
+      activeMeetingId: session.id,
+      updatedAt: new Date().toISOString(),
+    };
+    upsertRoom(updated);
+    setRoom(updated);
+    setActiveMeeting(session);
+    wrapUpTriggeredRef.current = false;
+    setMeetingDialogOpen(false);
+
+    // Insert system message
+    const sysMsg: Message = {
+      id: generateId(),
+      roomId: room.id,
+      agentId: null,
+      role: 'system',
+      content: `🎯 **Meeting started:** "${session.topic}"\n\n**Goals:** ${session.goals}\n${session.additionalInfo ? `**Additional Info:** ${session.additionalInfo}\n` : ''}**Duration:** ${session.durationMinutes} minutes`,
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(sysMsg);
+    setMessages(prev => [...prev, sysMsg]);
+    toast({ title: '🎯 Meeting started', description: `${session.durationMinutes} min — ${session.topic}` });
+  };
+
+  const endMeetingEarly = () => {
+    if (!activeMeeting || !room) return;
+    const updated = { ...activeMeeting, status: 'ended' as const };
+    saveMeetingSession(updated);
+    setActiveMeeting(null);
+    const roomUpdated = { ...room, activeMeetingId: undefined, updatedAt: new Date().toISOString() };
+    upsertRoom(roomUpdated);
+    setRoom(roomUpdated);
+    const sysMsg: Message = {
+      id: generateId(),
+      roomId: room.id,
+      agentId: null,
+      role: 'system',
+      content: '⏹️ **Meeting ended early.**',
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(sysMsg);
+    setMessages(prev => [...prev, sysMsg]);
   };
 
   const runSummarizer = async (action: SummarizerAction) => {
@@ -312,7 +516,6 @@ export default function RoomView() {
     const updated = { ...room, orchestration: type, updatedAt: new Date().toISOString() };
     upsertRoom(updated);
     setRoom(updated);
-    // Stop auto-run if switching away from auto modes
     if (type === 'manual') {
       stopAutoRun();
     }
@@ -341,7 +544,6 @@ export default function RoomView() {
       return agents.find(a => a.id === order[nextIdx]) || agents[0];
     }
 
-    // Auto / Loop: pick the agent who spoke least recently, weighted by balance
     const speakCounts = new Map<string, number>();
     agents.forEach(a => speakCounts.set(a.id, 0));
     currentMessages.filter(m => m.role === 'agent').forEach(m => {
@@ -352,7 +554,6 @@ export default function RoomView() {
     const eligible = agents.filter(a => a.id !== lastAgentMsg?.agentId);
     if (eligible.length === 0) return agents[0];
 
-    // Sort by least spoken
     eligible.sort((a, b) => (speakCounts.get(a.id) || 0) - (speakCounts.get(b.id) || 0));
     return eligible[0];
   };
@@ -379,9 +580,10 @@ export default function RoomView() {
       setLoadingAgentId(nextAgent.id);
       setLoopProgress(null);
       try {
+        const meetingCtx = getMeetingContextNow();
         const result = await callAgent(nextAgent, currentMessages, allAgents, room.documents || [], room.id, (progress) => {
           setLoopProgress(progress);
-        });
+        }, meetingCtx);
         if (!autoRunningRef.current) break;
 
         const msg: Message = {
@@ -404,7 +606,6 @@ export default function RoomView() {
         currentMessages = [...currentMessages, msg];
         setMessages([...currentMessages]);
 
-        // Update round count
         const completedRound = Math.floor((turn + 1) / roomAgents.length);
         setAutoRoundCount(completedRound);
       } catch (err: any) {
@@ -423,6 +624,11 @@ export default function RoomView() {
   if (!room) return null;
 
   const documents = room.documents || [];
+  const pastMeetings = getMeetingSessions(room.id).filter(m => m.status === 'ended').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  // Timer color
+  const timerColor = timeRemaining > 600 ? 'text-green-500' : timeRemaining > 300 ? 'text-yellow-500' : 'text-destructive';
+  const timerBgColor = timeRemaining > 600 ? 'bg-green-500/10 border-green-500/30' : timeRemaining > 300 ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-destructive/10 border-destructive/30';
 
   return (
     <div className="flex h-full animate-fade-in">
@@ -438,6 +644,61 @@ export default function RoomView() {
             {room.goal && <p className="text-xs text-muted-foreground truncate">{room.goal}</p>}
           </div>
           <div className="flex items-center gap-2">
+            {/* Meeting button */}
+            <Dialog open={meetingDialogOpen} onOpenChange={setMeetingDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => {
+                  setMeetingTopic(room.title);
+                  setMeetingGoals(room.goal);
+                  setMeetingAdditionalInfo('');
+                  setMeetingDuration('30');
+                }}>
+                  <Timer className="h-3.5 w-3.5" />
+                  Start Meeting
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><Timer className="h-4 w-4" /> Start a Timed Meeting</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 pt-2">
+                  <div>
+                    <Label htmlFor="meeting-topic">Topic</Label>
+                    <Input id="meeting-topic" value={meetingTopic} onChange={e => setMeetingTopic(e.target.value)} placeholder="Meeting topic" />
+                  </div>
+                  <div>
+                    <Label htmlFor="meeting-goals">Goals</Label>
+                    <Textarea id="meeting-goals" value={meetingGoals} onChange={e => setMeetingGoals(e.target.value)} placeholder="What should the meeting achieve?" rows={2} />
+                  </div>
+                  <div>
+                    <Label htmlFor="meeting-info">Additional Information</Label>
+                    <Textarea id="meeting-info" value={meetingAdditionalInfo} onChange={e => setMeetingAdditionalInfo(e.target.value)} placeholder="Any extra context, constraints, or background..." rows={3} />
+                  </div>
+                  <div>
+                    <Label>Duration</Label>
+                    <Select value={meetingDuration} onValueChange={setMeetingDuration}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[2, 15, 30, 45, 60, 90, 120].map(n => (
+                          <SelectItem key={n} value={String(n)}>{n} minutes</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {documents.length > 0 && (
+                    <div className="rounded-md border border-border p-2.5 bg-muted/30">
+                      <p className="text-xs text-muted-foreground mb-1">📄 {documents.length} document{documents.length > 1 ? 's' : ''} will be shared with agents</p>
+                    </div>
+                  )}
+                  <Button onClick={startMeeting} className="w-full gap-2" disabled={!meetingTopic.trim()}>
+                    <Play className="h-3.5 w-3.5" /> Start Meeting Now
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
             {/* Document indicator */}
             {documents.length > 0 && (
               <button
@@ -467,6 +728,30 @@ export default function RoomView() {
             </button>
           </div>
         </div>
+
+        {/* Meeting Timer Bar */}
+        {activeMeeting && activeMeeting.status !== 'ended' && (
+          <div className={`flex items-center gap-3 border-b px-4 py-2 ${timerBgColor}`}>
+            <Timer className={`h-4 w-4 ${timerColor} ${timeRemaining <= 300 ? 'animate-pulse' : ''}`} />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-foreground truncate">{activeMeeting.topic}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {activeMeeting.status === 'wrap-up' ? '⚠️ Wrap-up phase' : 'In progress'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-sm font-mono font-bold ${timerColor}`}>
+                {formatTime(timeRemaining)}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                / {formatTime(activeMeeting.durationMinutes * 60)}
+              </span>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] text-muted-foreground hover:text-destructive" onClick={endMeetingEarly}>
+                <Square className="h-3 w-3 mr-1" /> End
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Document panel (collapsible) */}
         {showDocPanel && (
@@ -514,6 +799,8 @@ export default function RoomView() {
                 <div className={`max-w-[85%] rounded-lg px-3 py-2.5 text-sm ${
                   isUser
                     ? 'bg-primary text-primary-foreground ml-auto'
+                    : isSystem
+                    ? 'bg-muted/60 border border-dashed border-muted-foreground/30 text-center mx-auto'
                     : isSummarizer
                     ? 'bg-accent/10 border border-accent/20'
                     : 'bg-card border border-border'
@@ -536,11 +823,9 @@ export default function RoomView() {
                   <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
-                  {/* Code execution panel - shows public shared code blocks */}
                   {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
                     <CodeExecutionPanel blocks={msg.codeBlocks.filter(b => b.context === 'public')} />
                   )}
-                  {/* Inner thoughts - only visible to the user, styled differently */}
                   {msg.innerThoughts && agent && (
                     <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
@@ -555,7 +840,6 @@ export default function RoomView() {
               </div>
             );
           })}
-          {/* Research Loop Progress Bar */}
           {loopProgress && loadingAgentId && (() => {
             const agent = allAgents.find(a => a.id === loadingAgentId);
             return agent ? <ResearchProgressBar progress={loopProgress} agentName={agent.name} /> : null;
@@ -631,7 +915,6 @@ export default function RoomView() {
         {/* Input */}
         <div className="border-t border-border p-3 bg-card">
           <div className="flex gap-2">
-            {/* Document upload button */}
             <input
               ref={fileInputRef}
               type="file"
@@ -778,6 +1061,29 @@ export default function RoomView() {
             </div>
           )}
         </div>
+
+        {/* Past Meetings */}
+        {pastMeetings.length > 0 && (
+          <div className="border-t border-border p-3">
+            <button
+              onClick={() => setShowPastMeetings(!showPastMeetings)}
+              className="flex items-center gap-1.5 w-full text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
+            >
+              {showPastMeetings ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Past Meetings ({pastMeetings.length})
+            </button>
+            {showPastMeetings && (
+              <div className="mt-2 space-y-1.5">
+                {pastMeetings.map(m => (
+                  <div key={m.id} className="rounded border border-border p-2 bg-muted/20">
+                    <p className="text-[10px] font-medium text-foreground truncate">{m.topic}</p>
+                    <p className="text-[9px] text-muted-foreground">{m.durationMinutes}min • {new Date(m.createdAt).toLocaleDateString()}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Orchestration settings */}
         <div className="mt-auto border-t border-border p-3">

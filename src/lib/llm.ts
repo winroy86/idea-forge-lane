@@ -1,4 +1,4 @@
-import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta } from '@/types';
+import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 
@@ -23,7 +23,7 @@ function findProvider(providerType: string, baseUrl?: string): ProviderConfig | 
   return providers.find(p => p.provider === providerType && p.isActive) || null;
 }
 
-function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId?: string): string {
+function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext): string {
   let prompt = agent.systemPrompt || `You are ${agent.name}, a ${agent.role}.`;
   if (agent.domain) prompt += `\nYour area of expertise is: ${agent.domain}.`;
   if (agent.pointOfView) prompt += `\nYour perspective/point of view: ${agent.pointOfView}.`;
@@ -35,6 +35,21 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
     });
     prompt += `\n--- END DOCUMENTS ---\n`;
   }
+  // Inject meeting context if active
+  if (meetingContext) {
+    prompt += `\n\n--- MEETING CONTEXT ---`;
+    prompt += `\nTopic: ${meetingContext.topic}`;
+    prompt += `\nGoals: ${meetingContext.goals}`;
+    if (meetingContext.additionalInfo) prompt += `\nAdditional Info: ${meetingContext.additionalInfo}`;
+    prompt += `\nTime Remaining: ${Math.round(meetingContext.timeRemainingMinutes)} minutes of ${meetingContext.totalDurationMinutes} total`;
+    prompt += `\nPhase: ${meetingContext.phase}`;
+    prompt += `\n--- END MEETING CONTEXT ---`;
+    if (meetingContext.phase === 'active') {
+      prompt += `\n\nYou have ${Math.round(meetingContext.timeRemainingMinutes)} minutes remaining. Structure your arguments accordingly — be thorough but mindful of time.`;
+    } else {
+      prompt += `\n\nThe meeting ends in ${Math.round(meetingContext.timeRemainingMinutes)} minutes. Focus on summarizing your position and key takeaways rather than introducing new arguments.`;
+    }
+  }
   // Inject agent memories if memory is enabled
   if (agent.memoryEnabled) {
     const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
@@ -44,8 +59,8 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
   return prompt;
 }
 
-function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string) {
-  const system = buildSystemMessage(agent, documents, roomId);
+function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext) {
+  const system = buildSystemMessage(agent, documents, roomId, meetingContext);
   // Only include public content - inner thoughts are private and not shared
   const history = messages.map(m => {
     if (m.role === 'user') {
@@ -266,6 +281,7 @@ export async function callAgent(
   documents: RoomDocument[] = [],
   roomId?: string,
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
+  meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
   if (agent.config.provider !== 'lovable') {
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
@@ -274,7 +290,7 @@ export async function callAgent(
     }
   }
 
-  const { system, history } = buildChatMessages(agent, messages, allAgents, documents, roomId);
+  const { system, history } = buildChatMessages(agent, messages, allAgents, documents, roomId, meetingContext);
   const start = performance.now();
 
   // Determine which tools are enabled for this agent

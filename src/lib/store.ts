@@ -1,4 +1,4 @@
-import { Agent, Room, Message, ProviderConfig } from '@/types';
+import { Agent, Room, Message, ProviderConfig, MeetingSession } from '@/types';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -18,6 +18,7 @@ const KEYS = {
   agents: 'br_agents',
   messages: 'br_messages',
   providers: 'br_providers',
+  meetings: 'br_meetings',
 };
 
 // Rooms
@@ -64,6 +65,21 @@ export const upsertProvider = (p: ProviderConfig) => {
   saveProviders(providers);
 };
 export const deleteProvider = (id: string) => saveProviders(getProviders().filter(p => p.id !== id));
+
+// Meetings
+export const getAllMeetings = (): MeetingSession[] => load(KEYS.meetings, []);
+export const getMeetingSessions = (roomId: string): MeetingSession[] =>
+  getAllMeetings().filter(m => m.roomId === roomId);
+export const saveMeetingSession = (session: MeetingSession) => {
+  const all = getAllMeetings().filter(m => m.id !== session.id);
+  all.push(session);
+  save(KEYS.meetings, all);
+};
+export const getActiveMeeting = (roomId: string): MeetingSession | undefined => {
+  const room = getRoom(roomId);
+  if (!room?.activeMeetingId) return undefined;
+  return getAllMeetings().find(m => m.id === room.activeMeetingId);
+};
 
 // Utility
 export const generateId = () => crypto.randomUUID();
