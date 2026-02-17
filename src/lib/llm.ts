@@ -1,8 +1,8 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
-import { getProviders, getLocalDevMode } from '@/lib/store';
+import { getAppSettings, getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
-import { supabase } from '@/integrations/supabase/client';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 
 interface LLMResponse {
   content: string;
@@ -255,20 +255,31 @@ async function callGemini(
   };
 }
 
-// ---- Lovable AI (via edge function) ----
+type ToolCallRecord = { tool: string; query: string; result: string; sources: string[] };
 
-async function callLovableAI(
+// ---- Provider-agnostic orchestration (via edge function) ----
+
+async function callOrchestratedProvider(
+  provider: Agent['config']['provider'],
   model: string,
   system: string,
   history: { role: string; content: string }[],
   agent: Agent,
   toolsEnabled?: string[],
-  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
-): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean; authType?: string; authToken?: string; authHeader?: string }>,
+): Promise<{ content: string; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number }; toolCallsMade?: ToolCallRecord[] }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
 
+  const providerConfig = provider === 'lovable' ? null : findProvider(provider, agent.config.baseUrl);
+  if (provider !== 'lovable' && !providerConfig) {
+    throw new Error(`No active provider configured for "${provider}". Go to Providers to add an API key.`);
+  }
+
   const bodyPayload: Record<string, unknown> = {
+    provider,
+    api_key: providerConfig?.apiKey,
+    base_url: providerConfig?.baseUrl || agent.config.baseUrl,
     model: model || 'google/gemini-3-flash-preview',
     messages: [
       { role: 'system', content: system },
@@ -302,10 +313,10 @@ async function callLovableAI(
     const err = await res.text();
     try {
       const parsed = JSON.parse(err);
-      throw new Error(parsed.error || `Lovable AI error (${res.status})`);
+      throw new Error(parsed.error || `Provider error (${res.status})`);
     } catch (e) {
       if (e instanceof Error && e.message !== `Unexpected token`) throw e;
-      throw new Error(`Lovable AI error (${res.status}): ${err}`);
+      throw new Error(`Provider error (${res.status}): ${err}`);
     }
   }
 
@@ -625,23 +636,10 @@ async function callProviderRaw(
   system: string,
   history: { role: string; content: string }[],
   toolsEnabled?: string[],
-): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
-  const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
-  const localDevMode = getLocalDevMode();
-
-  if (!localDevMode) {
-    const provider = findProvider(agent.config.provider, agent.config.baseUrl);
-    const result = await callProviderViaEdge(provider?.id, agent.config.provider, agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
-    return {
-      content: result.content,
-      tokensUsed: result.usage?.total_tokens,
-      toolCallsMade: result.toolCallsMade,
-    };
-  }
-
+): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: ToolCallRecord[] }> {
   let content = '';
   let tokensUsed: number | undefined;
-  let toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> | undefined;
+  let toolCallsMade: ToolCallRecord[] | undefined;
 
   switch (agent.config.provider) {
     case 'lovable': {
@@ -676,8 +674,27 @@ async function callProviderRaw(
           : 'https://api.openai.com/v1';
       if (!baseUrl) throw new Error('No base URL configured for custom provider.');
       const result = await callOpenAICompatible(provider.apiKey || '', baseUrl, agent.config.model, system, history, agent);
+    case 'lovable':
+    case 'anthropic':
+    case 'gemini':
+    case 'openai':
+    case 'azure':
+    case 'ollama':
+    case 'custom':
+    default: {
+      const result = await callOrchestratedProvider(
+        agent.config.provider,
+        agent.config.model,
+        system,
+        history,
+        agent,
+        toolsEnabled,
+        mcpServers.length > 0 ? mcpServers : undefined,
+      );
       content = result.content;
-      tokensUsed = result.usage?.total_tokens;
+      tokensUsed = result.usage?.total_tokens
+        ?? (result.usage ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0) : undefined);
+      toolCallsMade = result.toolCallsMade;
       break;
     }
   }
@@ -685,19 +702,35 @@ async function callProviderRaw(
   return { content, tokensUsed, toolCallsMade };
 }
 
-// ---- Summarizer (uses first available provider) ----
+// ---- Summarizer ----
+
+interface SummarizerCallOptions {
+  provider?: Agent['config']['provider'];
+  model?: string;
+  baseUrl?: string;
+}
 
 export async function callSummarizer(
   action: SummarizerAction,
   messages: Message[],
   allAgents: Agent[],
+  options?: SummarizerCallOptions,
 ): Promise<LLMResponse> {
-  // Prefer Lovable AI for summarizer (no API key needed)
-  const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
-  const providers = getProviders().filter(p => p.isActive);
+  const appSettings = getAppSettings();
+  const configured = appSettings.summarizer;
+  const selectedProvider = options?.provider || configured.provider;
+  const selectedModel = options?.model || configured.model;
+  const selectedBaseUrl = options?.baseUrl ?? configured.baseUrl;
 
-  if (!hasLovableCloud && providers.length === 0) {
-    throw new Error('No active providers configured. Go to Providers to configure a provider.');
+  if (!selectedProvider || !selectedModel) {
+    throw new Error('Summarizer settings are incomplete. Configure provider and model in Settings.');
+  }
+
+  if (selectedProvider !== 'lovable') {
+    const provider = findProvider(selectedProvider, selectedBaseUrl);
+    if (!provider) {
+      throw new Error(`No active provider configured for "${selectedProvider}". Go to Providers to add an API key.`);
+    }
   }
 
   const actionPrompts: Record<SummarizerAction, string> = {
@@ -714,19 +747,91 @@ export async function callSummarizer(
     return { role: 'user' as const, content: `${prefix}: ${m.content}` };
   });
 
+ <<<<<<< codex/refactor-callsummarizer-to-respect-settings
+  const summarizerAgent = {
+    id: 'summarizer',
+    name: 'Summarizer',
+    role: 'Summarizer',
+    domain: '',
+    pointOfView: '',
+    systemPrompt: '',
+    styleVoice: '',
+    colorIndex: 0,
+    memoryEnabled: false,
+    researchLoops: 0,
+    memoryScopeDefault: 'local' as const,
+    skills: [],
+    mcpServers: [],
+    permissions: { webSearch: false, fileRead: false, fileWrite: false, codeExecution: false },
+    createdAt: '',
+    updatedAt: '',
+    config: {
+      provider: selectedProvider,
+      model: selectedModel,
+      baseUrl: selectedBaseUrl,
+      temperature: 0.3,
+      topP: 1,
+      maxTokens: 2048,
+      presencePenalty: 0,
+      frequencyPenalty: 0,
+    },
+  } as Agent;
+=======
   const start = performance.now();
   let content = '';
   let usedModel = '';
   let usedProvider = '';
 
-  const localDevMode = getLocalDevMode();
-  const provider = hasLovableCloud && !localDevMode
-    ? ({ id: 'lovable', provider: 'lovable' } as any)
-    : providers[0];
+  // Try Lovable AI first
+  if (hasLovableCloud) {
+    const selected = getDefaultLlmSelection({
+      provider: 'lovable',
+      preferredModel: 'google/gemini-3-flash-preview',
+    });
 
-  if (!provider) {
-    throw new Error('No active provider configured.');
-  }
+    const tempAgent = {
+      config: {
+        provider: selected.provider,
+        model: selected.model,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+ <<<<<<< codex/refactor-tool-orchestration-architecture
+    const result = await callOrchestratedProvider('lovable', 'google/gemini-3-flash-preview', system, history, tempAgent);
+    const result = await callLovableAI(tempAgent.config.model, system, history, tempAgent);
+ >>>>>>> main
+    content = result.content;
+    usedModel = tempAgent.config.model;
+    usedProvider = selected.provider;
+  } else {
+    const provider = providers[0];
+    const selected = getDefaultLlmSelection({
+      provider: provider.provider,
+      preferredModel:
+        provider.provider === 'lovable' || provider.provider === 'gemini'
+          ? 'google/gemini-2.5-flash'
+          : undefined,
+    });
+
+    const tempAgent = {
+      config: {
+        provider: selected.provider,
+        model: selected.model,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+ >>>>>>> main
+
+  const start = performance.now();
+  const result = await callProviderRaw(summarizerAgent, system, history);
 
   const tempAgent = {
     config: {
@@ -748,9 +853,9 @@ export async function callSummarizer(
   usedProvider = provider.provider;
 
   return {
-    content,
+    content: result.content,
     latencyMs: Math.round(performance.now() - start),
-    model: usedModel,
-    provider: usedProvider,
+    model: selectedModel,
+    provider: selectedProvider,
   };
 }
