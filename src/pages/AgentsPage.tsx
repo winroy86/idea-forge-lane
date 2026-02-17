@@ -28,7 +28,11 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+ <<<<<<< codex/update-provider-selection-compatibility-logic
 import { DEFAULT_MODELS, getDefaultLlmSelection } from '@/lib/providerSelection';
+=======
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
+        >>>>>>> main
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
@@ -556,10 +560,11 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
 
     setIsGenerating(true);
     try {
+      const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
       const { data, error } = await supabase.functions.invoke('generate-persona', {
         body: mode === 'famous'
-          ? { personName: personName.trim(), description: description.trim() }
-          : { description: description.trim() },
+          ? { personName: personName.trim(), description: description.trim(), llm }
+          : { description: description.trim(), llm },
       });
 
       if (error) throw new Error(error.message);
