@@ -207,20 +207,31 @@ async function callGemini(
   };
 }
 
-// ---- Lovable AI (via edge function) ----
+type ToolCallRecord = { tool: string; query: string; result: string; sources: string[] };
 
-async function callLovableAI(
+// ---- Provider-agnostic orchestration (via edge function) ----
+
+async function callOrchestratedProvider(
+  provider: Agent['config']['provider'],
   model: string,
   system: string,
   history: { role: string; content: string }[],
   agent: Agent,
   toolsEnabled?: string[],
-  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
-): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean; authType?: string; authToken?: string; authHeader?: string }>,
+): Promise<{ content: string; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number }; toolCallsMade?: ToolCallRecord[] }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
 
+  const providerConfig = provider === 'lovable' ? null : findProvider(provider, agent.config.baseUrl);
+  if (provider !== 'lovable' && !providerConfig) {
+    throw new Error(`No active provider configured for "${provider}". Go to Providers to add an API key.`);
+  }
+
   const bodyPayload: Record<string, unknown> = {
+    provider,
+    api_key: providerConfig?.apiKey,
+    base_url: providerConfig?.baseUrl || agent.config.baseUrl,
     model: model || 'google/gemini-3-flash-preview',
     messages: [
       { role: 'system', content: system },
@@ -251,10 +262,10 @@ async function callLovableAI(
     const err = await res.text();
     try {
       const parsed = JSON.parse(err);
-      throw new Error(parsed.error || `Lovable AI error (${res.status})`);
+      throw new Error(parsed.error || `Provider error (${res.status})`);
     } catch (e) {
       if (e instanceof Error && e.message !== `Unexpected token`) throw e;
-      throw new Error(`Lovable AI error (${res.status}): ${err}`);
+      throw new Error(`Provider error (${res.status}): ${err}`);
     }
   }
 
@@ -574,56 +585,35 @@ async function callProviderRaw(
   system: string,
   history: { role: string; content: string }[],
   toolsEnabled?: string[],
-): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+): Promise<{ content: string; tokensUsed?: number; toolCallsMade?: ToolCallRecord[] }> {
   let content = '';
   let tokensUsed: number | undefined;
-  let toolCallsMade: Array<{ tool: string; query: string; result: string; sources: string[] }> | undefined;
+  let toolCallsMade: ToolCallRecord[] | undefined;
 
   const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
 
   switch (agent.config.provider) {
-    case 'lovable': {
-      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
-      content = result.content;
-      tokensUsed = result.usage?.total_tokens;
-      toolCallsMade = result.toolCallsMade;
-      break;
-    }
-    case 'anthropic': {
-      const provider = findProvider('anthropic')!;
-      const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
-      content = result.content;
-      tokensUsed = result.usage
-        ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0)
-        : undefined;
-      break;
-    }
-    case 'gemini': {
-      const provider = findProvider('gemini')!;
-      const result = await callGemini(provider.apiKey, agent.config.model, system, history, agent);
-      content = result.content;
-      break;
-    }
+    case 'lovable':
+    case 'anthropic':
+    case 'gemini':
     case 'openai':
     case 'azure':
     case 'ollama':
     case 'custom':
     default: {
-      const provider = findProvider(agent.config.provider, agent.config.baseUrl)!;
-      const baseUrl =
-        agent.config.provider === 'ollama'
-          ? (provider.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
-          : agent.config.provider === 'azure'
-          ? (provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT')
-          : agent.config.provider === 'custom'
-          ? (provider.baseUrl || agent.config.baseUrl || '')
-          : 'https://api.openai.com/v1';
-
-      if (!baseUrl) throw new Error('No base URL configured for custom provider.');
-
-      const result = await callOpenAICompatible(provider.apiKey, baseUrl, agent.config.model, system, history, agent);
+      const result = await callOrchestratedProvider(
+        agent.config.provider,
+        agent.config.model,
+        system,
+        history,
+        agent,
+        toolsEnabled,
+        mcpServers.length > 0 ? mcpServers : undefined,
+      );
       content = result.content;
-      tokensUsed = result.usage?.total_tokens;
+      tokensUsed = result.usage?.total_tokens
+        ?? (result.usage ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0) : undefined);
+      toolCallsMade = result.toolCallsMade;
       break;
     }
   }
@@ -678,7 +668,7 @@ export async function callSummarizer(
         frequencyPenalty: 0,
       },
     } as Agent;
-    const result = await callLovableAI('google/gemini-3-flash-preview', system, history, tempAgent);
+    const result = await callOrchestratedProvider('lovable', 'google/gemini-3-flash-preview', system, history, tempAgent);
     content = result.content;
     usedModel = 'google/gemini-3-flash-preview';
     usedProvider = 'lovable';
