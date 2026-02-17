@@ -2,6 +2,7 @@ import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlo
 import { getAppSettings, getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 
 interface LLMResponse {
   content: string;
@@ -676,6 +677,7 @@ export async function callSummarizer(
     return { role: 'user' as const, content: `${prefix}: ${m.content}` };
   });
 
+ <<<<<<< codex/refactor-callsummarizer-to-respect-settings
   const summarizerAgent = {
     id: 'summarizer',
     name: 'Summarizer',
@@ -704,6 +706,56 @@ export async function callSummarizer(
       frequencyPenalty: 0,
     },
   } as Agent;
+=======
+  const start = performance.now();
+  let content = '';
+  let usedModel = '';
+  let usedProvider = '';
+
+  // Try Lovable AI first
+  if (hasLovableCloud) {
+    const selected = getDefaultLlmSelection({
+      provider: 'lovable',
+      preferredModel: 'google/gemini-3-flash-preview',
+    });
+
+    const tempAgent = {
+      config: {
+        provider: selected.provider,
+        model: selected.model,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+    const result = await callLovableAI(tempAgent.config.model, system, history, tempAgent);
+    content = result.content;
+    usedModel = tempAgent.config.model;
+    usedProvider = selected.provider;
+  } else {
+    const provider = providers[0];
+    const selected = getDefaultLlmSelection({
+      provider: provider.provider,
+      preferredModel:
+        provider.provider === 'lovable' || provider.provider === 'gemini'
+          ? 'google/gemini-2.5-flash'
+          : undefined,
+    });
+
+    const tempAgent = {
+      config: {
+        provider: selected.provider,
+        model: selected.model,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+ >>>>>>> main
 
   const start = performance.now();
   const result = await callProviderRaw(summarizerAgent, system, history);

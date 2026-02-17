@@ -13,6 +13,7 @@ import {
   getMeetingSessions, saveMeetingSession, getActiveMeeting
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import ResearchProgressBar from '@/components/ResearchProgressBar';
@@ -293,6 +294,7 @@ export default function RoomView() {
     }
     const base64 = btoa(binary);
 
+    const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
     const res = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
       method: 'POST',
       headers: {
@@ -303,6 +305,7 @@ export default function RoomView() {
         fileBase64: base64,
         fileName: file.name,
         mimeType: file.type || 'application/pdf',
+        llm,
       }),
     });
 
