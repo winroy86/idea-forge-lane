@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+const AI_BASE_URL = Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -192,7 +194,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
   // If both fail, use the LLM's own knowledge but be honest about it
   if (snippets.length === 0) {
     // Use LLM knowledge but clearly state it's from training data
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const res = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -225,7 +227,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
   // Synthesize with LLM
   const searchContext = snippets.join("\n\n");
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch(`${AI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -444,9 +446,9 @@ serve(async (req) => {
   try {
     const { messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const AI_API_KEY = Deno.env.get("AI_API_KEY");
+    if (!AI_API_KEY) {
+      throw new Error("AI_API_KEY is not configured");
     }
 
     // Populate MCP auth configs from incoming server data
@@ -507,10 +509,10 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    let response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    let response = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${AI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -522,10 +524,10 @@ serve(async (req) => {
       const bodyNoTools = { ...body };
       delete bodyNoTools.tools;
       delete bodyNoTools.tool_choice;
-      response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      response = await fetch(`${AI_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${AI_API_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(bodyNoTools),
@@ -583,7 +585,7 @@ serve(async (req) => {
         if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
-          const searchResult = await performWebSearch(query, LOVABLE_API_KEY);
+          const searchResult = await performWebSearch(query, AI_API_KEY);
           toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
           toolResult = searchResult.result;
         } else if (fnName === "code_execution") {
@@ -618,10 +620,10 @@ serve(async (req) => {
       }
 
       body.messages = updatedMessages;
-      const followUp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const followUp = await fetch(`${AI_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${AI_API_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),

@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+const AI_BASE_URL = Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -30,9 +32,9 @@ serve(async (req) => {
       );
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const AI_API_KEY = Deno.env.get("AI_API_KEY");
+    if (!AI_API_KEY) {
+      throw new Error("AI_API_KEY is not configured");
     }
 
     const effectiveMime = mimeType || "application/pdf";
@@ -42,7 +44,7 @@ serve(async (req) => {
 
     if (isVisionSupported) {
       // Use Gemini vision for PDFs and images
-      extractedText = await extractWithVision(LOVABLE_API_KEY, fileBase64, effectiveMime, fileName);
+      extractedText = await extractWithVision(AI_API_KEY, fileBase64, effectiveMime, fileName);
     } else {
       // For DOCX, PPTX, XLSX etc. — decode base64 and attempt to extract raw text
       // Then use AI to clean and structure it
@@ -51,7 +53,7 @@ serve(async (req) => {
         extractedText = rawText;
       } else {
         // If raw text extraction fails, ask AI to describe based on the filename
-        extractedText = await extractWithAIChat(LOVABLE_API_KEY, rawText, fileName, effectiveMime);
+        extractedText = await extractWithAIChat(AI_API_KEY, rawText, fileName, effectiveMime);
       }
     }
 
@@ -74,7 +76,7 @@ async function extractWithVision(
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -171,7 +173,7 @@ async function extractWithAIChat(
   fileName: string,
   mimeType: string
 ): Promise<string> {
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

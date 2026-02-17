@@ -207,68 +207,6 @@ async function callGemini(
   };
 }
 
-// ---- Lovable AI (via edge function) ----
-
-async function callLovableAI(
-  model: string,
-  system: string,
-  history: { role: string; content: string }[],
-  agent: Agent,
-  toolsEnabled?: string[],
-  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
-): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Cloud provider is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
-  }
-
-  const bodyPayload: Record<string, unknown> = {
-    model: model || 'google/gemini-3-flash-preview',
-    messages: [
-      { role: 'system', content: system },
-      ...history,
-    ],
-    temperature: agent.config.temperature,
-    max_tokens: agent.config.maxTokens,
-    top_p: agent.config.topP,
-    presence_penalty: agent.config.presencePenalty,
-    frequency_penalty: agent.config.frequencyPenalty,
-    tools_enabled: toolsEnabled,
-  };
-
-  if (mcpServers && mcpServers.length > 0) {
-    bodyPayload.mcp_servers = mcpServers;
-  }
-
-  const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${supabaseKey}`,
-    },
-    body: JSON.stringify(bodyPayload),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    try {
-      const parsed = JSON.parse(err);
-      throw new Error(parsed.error || `Lovable AI error (${res.status})`);
-    } catch (e) {
-      if (e instanceof Error && e.message !== `Unexpected token`) throw e;
-      throw new Error(`Lovable AI error (${res.status}): ${err}`);
-    }
-  }
-
-  const data = await res.json();
-  return {
-    content: data.choices?.[0]?.message?.content || 'No response',
-    usage: data.usage,
-    toolCallsMade: data._toolCallsMade,
-  };
-}
-
 // ---- Main entry point ----
 
 export interface ResearchLoopDetail {
@@ -295,11 +233,9 @@ export async function callAgent(
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
-  if (agent.config.provider !== 'lovable') {
-    const provider = findProvider(agent.config.provider, agent.config.baseUrl);
-    if (!provider) {
-      throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
-    }
+  const provider = findProvider(agent.config.provider, agent.config.baseUrl);
+  if (!provider) {
+    throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
   }
 
   const { system, history } = buildChatMessages(agent, messages, allAgents, documents, roomId, meetingContext);
@@ -585,13 +521,6 @@ async function callProviderRaw(
   const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
 
   switch (agent.config.provider) {
-    case 'lovable': {
-      const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
-      content = result.content;
-      tokensUsed = result.usage?.total_tokens;
-      toolCallsMade = result.toolCallsMade;
-      break;
-    }
     case 'anthropic': {
       const provider = findProvider('anthropic')!;
       const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
@@ -641,11 +570,9 @@ export async function callSummarizer(
   messages: Message[],
   allAgents: Agent[],
 ): Promise<LLMResponse> {
-  // Prefer Lovable AI for summarizer (no API key needed)
-  const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
   const providers = getProviders().filter(p => p.isActive);
 
-  if (!hasLovableCloud && providers.length === 0) {
+  if (providers.length === 0) {
     throw new Error('No active providers configured. Go to Providers to add an API key.');
   }
 
@@ -668,25 +595,7 @@ export async function callSummarizer(
   let usedModel = '';
   let usedProvider = '';
 
-  // Try Lovable AI first
-  if (hasLovableCloud) {
-    const tempAgent = {
-      config: {
-        provider: 'lovable' as const,
-        model: 'google/gemini-3-flash-preview',
-        temperature: 0.3,
-        topP: 1,
-        maxTokens: 2048,
-        presencePenalty: 0,
-        frequencyPenalty: 0,
-      },
-    } as Agent;
-    const result = await callLovableAI('google/gemini-3-flash-preview', system, history, tempAgent);
-    content = result.content;
-    usedModel = 'google/gemini-3-flash-preview';
-    usedProvider = 'lovable';
-  } else {
-    const provider = providers[0];
+  const provider = providers[0];
     const tempAgent = {
       config: {
         provider: provider.provider,
@@ -723,9 +632,8 @@ export async function callSummarizer(
         break;
       }
     }
-    usedModel = tempAgent.config.model;
-    usedProvider = provider.provider;
-  }
+  usedModel = tempAgent.config.model;
+  usedProvider = provider.provider;
 
   return {
     content,
