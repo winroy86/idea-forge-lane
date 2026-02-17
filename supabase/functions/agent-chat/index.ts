@@ -285,12 +285,85 @@ function executeCode(code: string): string {
   }
 }
 
-// Call an MCP server tool
+// MCP session cache to avoid re-initializing every call
+const mcpSessions = new Map<string, string | null>();
+
+async function initMcpSession(serverUrl: string): Promise<string | null> {
+  if (mcpSessions.has(serverUrl)) return mcpSessions.get(serverUrl) || null;
+
+  try {
+    // Step 1: Initialize
+    const initRes = await fetch(serverUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'AgentStudio-Edge', version: '1.0.0' },
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!initRes.ok) {
+      console.log(`MCP init failed (${initRes.status}) for ${serverUrl}`);
+      mcpSessions.set(serverUrl, null);
+      return null;
+    }
+
+    const sessionId = initRes.headers.get('mcp-session-id');
+    // Consume response body
+    await initRes.json().catch(() => initRes.text());
+
+    // Step 2: Send initialized notification
+    const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionId) notifHeaders['mcp-session-id'] = sessionId;
+    await fetch(serverUrl, {
+      method: 'POST',
+      headers: notifHeaders,
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+
+    mcpSessions.set(serverUrl, sessionId);
+    console.log(`✅ MCP session initialized for ${serverUrl} (session: ${sessionId || 'none'})`);
+    return sessionId;
+  } catch (err) {
+    console.error(`MCP init error for ${serverUrl}:`, err);
+    mcpSessions.set(serverUrl, null);
+    return null;
+  }
+}
+
+function parseMcpResponse(contentType: string, body: string): any {
+  if (contentType.includes('text/event-stream')) {
+    const lines = body.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try { return JSON.parse(line.slice(6)); } catch {}
+      }
+    }
+    return null;
+  }
+  try { return JSON.parse(body); } catch { return null; }
+}
+
+// Call an MCP server tool with proper initialization
 async function callMcpTool(serverUrl: string, toolName: string, args: Record<string, unknown> = {}): Promise<string> {
   try {
+    const sessionId = await initMcpSession(serverUrl);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    };
+    if (sessionId) headers['mcp-session-id'] = sessionId;
+
     const res = await fetch(serverUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: Date.now(),
@@ -301,19 +374,43 @@ async function callMcpTool(serverUrl: string, toolName: string, args: Record<str
     });
 
     if (!res.ok) {
+      // If session expired, retry with fresh session
+      if (res.status === 404 || res.status === 400) {
+        mcpSessions.delete(serverUrl);
+        const newSessionId = await initMcpSession(serverUrl);
+        const retryHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream',
+        };
+        if (newSessionId) retryHeaders['mcp-session-id'] = newSessionId;
+        const retryRes = await fetch(serverUrl, {
+          method: 'POST',
+          headers: retryHeaders,
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: Date.now(),
+            method: 'tools/call',
+            params: { name: toolName, arguments: args },
+          }),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!retryRes.ok) return `MCP error (${retryRes.status}): ${await retryRes.text()}`;
+        const ct = retryRes.headers.get('content-type') || '';
+        const data = parseMcpResponse(ct, await retryRes.text());
+        if (data?.error) return `MCP error: ${data.error.message || JSON.stringify(data.error)}`;
+        const content = data?.result?.content;
+        if (Array.isArray(content)) return content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+        return JSON.stringify(data?.result, null, 2);
+      }
       return `MCP error (${res.status}): ${await res.text()}`;
     }
 
-    const data = await res.json();
-    if (data.error) {
-      return `MCP error: ${data.error.message || JSON.stringify(data.error)}`;
-    }
+    const ct = res.headers.get('content-type') || '';
+    const data = parseMcpResponse(ct, await res.text());
+    if (!data) return 'MCP returned empty response';
+    if (data.error) return `MCP error: ${data.error.message || JSON.stringify(data.error)}`;
 
-    // Extract content from MCP response
     const content = data.result?.content;
-    if (Array.isArray(content)) {
-      return content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
-    }
+    if (Array.isArray(content)) return content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
     return JSON.stringify(data.result, null, 2);
   } catch (err) {
     return `MCP call failed: ${err instanceof Error ? err.message : String(err)}`;

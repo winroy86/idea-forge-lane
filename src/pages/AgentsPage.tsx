@@ -323,25 +323,72 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                   onClick={async () => {
                     setMcpDiscovering(true);
                     try {
-                      // Try to discover tools via MCP list_tools
+                      // Try to discover tools via MCP protocol with proper initialization
                       const toolNames: string[] = [];
                       let serverName = new URL(mcpUrl).hostname;
                       try {
-                        const res = await fetch(mcpUrl, {
+                        // Step 1: Initialize handshake
+                        const initRes = await fetch(mcpUrl, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
-                          signal: AbortSignal.timeout(8000),
+                          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+                          body: JSON.stringify({
+                            jsonrpc: '2.0', id: 1, method: 'initialize',
+                            params: {
+                              protocolVersion: '2025-03-26',
+                              capabilities: {},
+                              clientInfo: { name: 'AgentStudio', version: '1.0.0' },
+                            },
+                          }),
+                          signal: AbortSignal.timeout(10000),
                         });
-                        if (res.ok) {
-                          const data = await res.json();
-                          if (data.result?.tools) {
-                            for (const t of data.result.tools) {
-                              toolNames.push(t.name);
-                            }
+
+                        let sessionId: string | null = null;
+                        if (initRes.ok) {
+                          sessionId = initRes.headers.get('mcp-session-id');
+                          const initData = await initRes.json();
+                          if (initData.result?.serverInfo?.name) {
+                            serverName = initData.result.serverInfo.name;
                           }
-                          if (data.result?.serverInfo?.name) {
-                            serverName = data.result.serverInfo.name;
+
+                          // Step 2: Send initialized notification
+                          const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                          if (sessionId) notifHeaders['mcp-session-id'] = sessionId;
+                          await fetch(mcpUrl, {
+                            method: 'POST',
+                            headers: notifHeaders,
+                            body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+                            signal: AbortSignal.timeout(5000),
+                          }).catch(() => {});
+
+                          // Step 3: List tools
+                          const listHeaders: Record<string, string> = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
+                          if (sessionId) listHeaders['mcp-session-id'] = sessionId;
+                          const res = await fetch(mcpUrl, {
+                            method: 'POST',
+                            headers: listHeaders,
+                            body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+                            signal: AbortSignal.timeout(10000),
+                          });
+                          if (res.ok) {
+                            const contentType = res.headers.get('content-type') || '';
+                            let data: any;
+                            if (contentType.includes('text/event-stream')) {
+                              // Parse SSE response
+                              const text = await res.text();
+                              const lines = text.split('\n');
+                              for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                  try { data = JSON.parse(line.slice(6)); } catch {}
+                                }
+                              }
+                            } else {
+                              data = await res.json();
+                            }
+                            if (data?.result?.tools) {
+                              for (const t of data.result.tools) {
+                                toolNames.push(t.name);
+                              }
+                            }
                           }
                         }
                       } catch {
