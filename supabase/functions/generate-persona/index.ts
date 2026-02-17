@@ -15,6 +15,37 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+ <<<<<<< codex/update-authorization-handling-for-providers
+type OpenAICompatibleProvider = "openai" | "azure" | "custom" | "ollama";
+
+function isLocalOpenAICompatibleUrl(url: string): boolean {
+  return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
+}
+
+function normalizeProvider(provider: string): OpenAICompatibleProvider {
+  if (provider === "azure" || provider === "custom" || provider === "ollama") return provider;
+  return "openai";
+}
+
+function providerRequiresApiKey(provider: OpenAICompatibleProvider, baseUrl: string): boolean {
+  // Ollama commonly runs locally without auth; keep keyless usage supported.
+  if (provider === "ollama") return false;
+
+  if (provider === "custom") {
+    const allowKeylessCustom = Deno.env.get("ALLOW_KEYLESS_CUSTOM_OPENAI") === "true";
+    return !(allowKeylessCustom || isLocalOpenAICompatibleUrl(baseUrl));
+  }
+
+  // OpenAI/Azure should remain strict about API key presence.
+  return true;
+}
+
+function buildOpenAICompatibleHeaders(apiKey?: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+=======
 function resolveConfig(input?: LlmConfig): Required<Pick<LlmConfig, 'provider' | 'model'>> & Pick<LlmConfig, 'apiKey' | 'baseUrl'> {
   const provider = input?.provider || 'lovable';
   const model = input?.model || 'google/gemini-2.5-flash';
@@ -113,6 +144,7 @@ async function callProviderText(systemPrompt: string, userPrompt: string, cfg: R
   if (!res.ok) throw new Error(`OpenAI-compatible error (${res.status})`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '';
+  >>>>>>> main
 }
 
 serve(async (req) => {
@@ -121,8 +153,21 @@ serve(async (req) => {
   }
 
   try {
+ <<<<<<< codex/update-authorization-handling-for-providers
+    const { personName, description } = await req.json();
+
+    const provider = normalizeProvider((Deno.env.get("OPENAI_COMPAT_PROVIDER") || Deno.env.get("AI_PROVIDER") || "openai").toLowerCase());
+    const openAICompatBaseUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "");
+    const chatCompletionsUrl = `${openAICompatBaseUrl}/chat/completions`;
+    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY") || "";
+
+    if (providerRequiresApiKey(provider, openAICompatBaseUrl) && !apiKey) {
+      throw new Error("API key is required for the configured AI provider");
+    }
+=======
     const { personName, description, llm } = await req.json();
     const cfg = resolveConfig(llm);
+    >>>>>>> main
 
     const isCustom = !personName && description;
     const systemPrompt = `You are an expert persona architect.
@@ -136,7 +181,7 @@ Rules:
 - systemPrompt must be 300-500 words.
 - pointOfView should be short (2-6 words).`
       : `Research and create a deeply accurate AI clone persona of "${personName}"${description ? ` with focus on: ${description}` : ''}.
- <<<<<<< codex/verify-local-setup-and-agent-capabilities
+      <<<<<<< codex/verify-local-setup-and-agent-capabilities
 Analyze communication style, beliefs, expertise, mannerisms, tone, and debate style.
 Output valid JSON only with the required keys.`;
 
@@ -195,12 +240,9 @@ Output valid JSON only with the required keys.`;
 
     for (const model of modelsToTry) {
       console.log(`Trying model: ${model}`);
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const response = await fetch(chatCompletionsUrl, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: buildOpenAICompatibleHeaders(apiKey),
         body: JSON.stringify({ ...requestBody, model }),
       });
 
@@ -219,12 +261,9 @@ Output valid JSON only with the required keys.`;
       if (response.status === 500) {
         console.log(`Model ${model} returned 500, retrying without tools...`);
         const { tools: _t, tool_choice: _tc, ...bodyWithoutTools } = requestBody;
-        const retryRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        const retryRes = await fetch(chatCompletionsUrl, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+          headers: buildOpenAICompatibleHeaders(apiKey),
           body: JSON.stringify({ ...bodyWithoutTools, model }),
         });
         if (retryRes.ok) {

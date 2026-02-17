@@ -15,6 +15,72 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+ <<<<<<< codex/update-authorization-handling-for-providers
+// Supported MIME types for Gemini vision
+const VISION_SUPPORTED_MIMES = [
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+];
+
+
+type OpenAICompatibleProvider = "openai" | "azure" | "custom" | "ollama";
+
+function isLocalOpenAICompatibleUrl(url: string): boolean {
+  return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
+}
+
+function normalizeProvider(provider: string): OpenAICompatibleProvider {
+  if (provider === "azure" || provider === "custom" || provider === "ollama") return provider;
+  return "openai";
+}
+
+function providerRequiresApiKey(provider: OpenAICompatibleProvider, baseUrl: string): boolean {
+  // Ollama commonly runs locally without auth; keep keyless usage supported.
+  if (provider === "ollama") return false;
+
+  if (provider === "custom") {
+    const allowKeylessCustom = Deno.env.get("ALLOW_KEYLESS_CUSTOM_OPENAI") === "true";
+    return !(allowKeylessCustom || isLocalOpenAICompatibleUrl(baseUrl));
+  }
+
+  // OpenAI/Azure should remain strict about API key presence.
+  return true;
+}
+
+function buildOpenAICompatibleHeaders(apiKey?: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { fileBase64, fileName, mimeType } = await req.json();
+
+    if (!fileBase64) {
+      return new Response(
+        JSON.stringify({ error: "No file data provided" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const provider = normalizeProvider((Deno.env.get("OPENAI_COMPAT_PROVIDER") || Deno.env.get("AI_PROVIDER") || "openai").toLowerCase());
+    const openAICompatBaseUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "");
+    const chatCompletionsUrl = `${openAICompatBaseUrl}/chat/completions`;
+    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY") || "";
+
+    if (providerRequiresApiKey(provider, openAICompatBaseUrl) && !apiKey) {
+      throw new Error("API key is required for the configured AI provider");
+    }
+=======
 const VISION_SUPPORTED_MIMES = ["application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"];
 
 function resolveConfig(input?: LlmConfig): Required<Pick<LlmConfig, 'provider' | 'model'>> & Pick<LlmConfig, 'apiKey' | 'baseUrl'> {
@@ -22,6 +88,7 @@ function resolveConfig(input?: LlmConfig): Required<Pick<LlmConfig, 'provider' |
   const model = input?.model || 'google/gemini-2.5-flash';
   return { provider, model, apiKey: input?.apiKey, baseUrl: input?.baseUrl };
 }
+    >>>>>>> main
 
 function openAiBaseUrl(cfg: ReturnType<typeof resolveConfig>): string {
   if (cfg.provider === 'ollama') return cfg.baseUrl || 'http://localhost:11434/v1';
@@ -44,6 +111,22 @@ async function callProviderText(prompt: string, cfg: ReturnType<typeof resolveCo
     return data.choices?.[0]?.message?.content || '';
   }
 
+  <<<<<<< codex/update-authorization-handling-for-providers
+    if (isVisionSupported) {
+      // Use Gemini vision for PDFs and images
+      extractedText = await extractWithVision(chatCompletionsUrl, apiKey, fileBase64, effectiveMime, fileName);
+    } else {
+      // For DOCX, PPTX, XLSX etc. — decode base64 and attempt to extract raw text
+      // Then use AI to clean and structure it
+      const rawText = extractRawText(fileBase64);
+      if (rawText.length > 50) {
+        extractedText = rawText;
+      } else {
+        // If raw text extraction fails, ask AI to describe based on the filename
+        extractedText = await extractWithAIChat(chatCompletionsUrl, apiKey, rawText, fileName, effectiveMime);
+      }
+    }
+=======
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('Missing apiKey for Anthropic');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -64,6 +147,7 @@ async function callProviderText(prompt: string, cfg: ReturnType<typeof resolveCo
     const data = await response.json();
     return data.content?.[0]?.text || '';
   }
+  >>>>>>> main
 
   if (cfg.provider === 'gemini') {
     if (!cfg.apiKey) throw new Error('Missing apiKey for Gemini');
@@ -80,6 +164,18 @@ async function callProviderText(prompt: string, cfg: ReturnType<typeof resolveCo
     return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   }
 
+  <<<<<<< codex/update-authorization-handling-for-providers
+async function extractWithVision(
+  chatCompletionsUrl: string,
+  apiKey: string,
+  fileBase64: string,
+  mimeType: string,
+  fileName: string
+): Promise<string> {
+  const response = await fetch(chatCompletionsUrl, {
+    method: "POST",
+    headers: buildOpenAICompatibleHeaders(apiKey),
+=======
   if (!cfg.apiKey) throw new Error(`Missing apiKey for provider ${cfg.provider}`);
   const baseUrl = openAiBaseUrl(cfg);
   if (!baseUrl) throw new Error('No base URL configured for custom provider.');
@@ -87,6 +183,7 @@ async function callProviderText(prompt: string, cfg: ReturnType<typeof resolveCo
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+    >>>>>>> main
     body: JSON.stringify({
       model: cfg.model,
       messages: [{ role: 'user', content: prompt }],
@@ -183,8 +280,37 @@ function extractRawText(fileBase64: string): string {
   }
 }
 
+ <<<<<<< codex/update-authorization-handling-for-providers
+// Use AI chat (non-vision) to clean up and structure raw extracted text
+async function extractWithAIChat(
+  chatCompletionsUrl: string,
+  apiKey: string,
+  rawText: string,
+  fileName: string,
+  mimeType: string
+): Promise<string> {
+  const response = await fetch(chatCompletionsUrl, {
+    method: "POST",
+    headers: buildOpenAICompatibleHeaders(apiKey),
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        {
+          role: "user",
+          content: `I have a file named "${fileName}" (${mimeType}). I extracted some raw text from it but it may be incomplete or noisy. Please clean it up and return the structured text content. If the raw text is too garbled, just say "Could not extract meaningful text from this file format."
+
+Raw extracted text:
+${rawText.slice(0, 10000)}`,
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 8192,
+    }),
+  });
+=======
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  >>>>>>> main
 
   try {
     const { fileBase64, fileName, mimeType, llm } = await req.json();
