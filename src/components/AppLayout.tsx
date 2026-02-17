@@ -10,6 +10,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { capabilities, capabilityLabel } from '@/lib/capabilities';
+import { clearSession, getSession, isAuthEnabled } from '@/lib/auth';
+import { testIds } from '@/testIds';
 
 interface LayoutContextType {
   sidebarOpen: boolean;
@@ -31,6 +34,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  const session = getSession();
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
@@ -105,6 +110,30 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <Menu className="h-5 w-5" />
             </button>
             <div className="hidden md:block" />
+            {isAuthEnabled() && session && (
+              <button
+                onClick={() => {
+                  clearSession();
+                  navigate('/login', { replace: true });
+                }}
+                className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                data-testid={testIds.auth.logoutButton}
+              >
+                Logout
+              </button>
+            )}
+            <div className="ml-auto hidden items-center gap-2 text-[11px] text-muted-foreground lg:flex">
+              <span className="font-medium">Capabilities:</span>
+              <span className={capabilities.supabase ? 'text-emerald-500' : 'text-amber-500'}>
+                Supabase {capabilityLabel(capabilities.supabase)}
+              </span>
+              <span className={capabilities.personaGeneration ? 'text-emerald-500' : 'text-amber-500'}>
+                Persona gen {capabilityLabel(capabilities.personaGeneration)}
+              </span>
+              <span className={capabilities.documentExtraction ? 'text-emerald-500' : 'text-amber-500'}>
+                Doc extraction {capabilityLabel(capabilities.documentExtraction)}
+              </span>
+            </div>
           </header>
 
           <main className="flex-1 overflow-auto">{children}</main>

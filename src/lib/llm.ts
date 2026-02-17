@@ -14,6 +14,9 @@ interface LLMResponse {
   provider: string;
 }
 
+const backendApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const isBackendModeEnabled = backendApiBaseUrl.length > 0;
+
 function findProvider(providerType: string, baseUrl?: string): ProviderConfig | null {
   const providers = getProviders();
   // Try exact match with baseUrl first
@@ -269,7 +272,10 @@ async function callOrchestratedProvider(
   mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean; authType?: string; authToken?: string; authHeader?: string }>,
 ): Promise<{ content: string; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number }; toolCallsMade?: ToolCallRecord[] }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  if (!supabaseUrl) throw new Error('Cloud not configured. Please check your setup.');
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Cloud provider is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
+  }
 
   const providerConfig = provider === 'lovable' ? null : findProvider(provider, agent.config.baseUrl);
   if (provider !== 'lovable' && !providerConfig) {
@@ -328,6 +334,46 @@ async function callOrchestratedProvider(
   };
 }
 
+async function callBackendLLM(
+  agent: Agent,
+  system: string,
+  history: { role: string; content: string }[],
+): Promise<{ content: string; tokensUsed?: number }> {
+  const res = await fetch(`${backendApiBaseUrl}/api/llm/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      agent: {
+        provider: agent.config.provider,
+        model: agent.config.model,
+        baseUrl: agent.config.baseUrl,
+        config: {
+          temperature: agent.config.temperature,
+          topP: agent.config.topP,
+          maxTokens: agent.config.maxTokens,
+          presencePenalty: agent.config.presencePenalty,
+          frequencyPenalty: agent.config.frequencyPenalty,
+        },
+      },
+      model: agent.config.model,
+      prompt: history[history.length - 1]?.content || '',
+      system,
+      history,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Backend LLM error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  return {
+    content: data.content || 'No response',
+    tokensUsed: data.usage?.total_tokens,
+  };
+}
+
 // ---- Main entry point ----
 
 export interface ResearchLoopDetail {
@@ -354,7 +400,12 @@ export async function callAgent(
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
+  <<<<<<< codex/add-backend-inference-endpoint-for-chat
+  if (agent.config.provider !== 'lovable' && !isBackendModeEnabled) {
+=======
+  await waitForProviderHydration();
   if (agent.config.provider !== 'lovable') {
+    >>>>>>> codex/create-prs-for-multiple-issues
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
     if (!provider) {
       throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to configure a provider.`);
@@ -640,6 +691,11 @@ async function callProviderRaw(
   let content = '';
   let tokensUsed: number | undefined;
   let toolCallsMade: ToolCallRecord[] | undefined;
+
+  if (isBackendModeEnabled && agent.config.provider !== 'lovable') {
+    const result = await callBackendLLM(agent, system, history);
+    return { content: result.content, tokensUsed: result.tokensUsed };
+  }
 
   switch (agent.config.provider) {
     case 'lovable': {

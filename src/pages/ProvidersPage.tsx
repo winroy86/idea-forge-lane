@@ -5,6 +5,7 @@ import { getProviders, upsertProvider, deleteProvider, generateId, getLocalDevMo
 import { supabase } from '@/integrations/supabase/client';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
+import { testIds } from '@/testIds';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -126,7 +127,7 @@ const detectOllama = async (url?: string) => {
   };
 
   return (
-    <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-3xl mx-auto">
+    <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-3xl mx-auto" data-testid={testIds.providers.page}>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Providers</h1>
@@ -138,15 +139,15 @@ const detectOllama = async (url?: string) => {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-1.5"><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
+            <Button size="sm" className="gap-1.5" data-testid={testIds.providers.addButton}><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent data-testid={testIds.providers.modal}>
             <DialogHeader><DialogTitle>Add Provider</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
               <div>
                 <Label>Provider</Label>
                 <Select value={newProvider} onValueChange={v => setNewProvider(v as LLMProvider)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid={testIds.providers.providerSelect}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
                   </SelectContent>
@@ -161,7 +162,7 @@ const detectOllama = async (url?: string) => {
                 <>
                   <div>
                     <Label>Label (optional)</Label>
-                    <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" />
+                    <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" data-testid={testIds.providers.labelInput} />
                   </div>
                   <div>
                     <Label>{localDevMode ? "API Key (stored in browser)" : "API Key (stored on server)"}</Label>
@@ -214,7 +215,7 @@ const detectOllama = async (url?: string) => {
               {newProvider === 'lovable' ? (
                 <Button onClick={() => setOpen(false)} className="w-full">Got it</Button>
               ) : (
-                <Button onClick={handleCreate} className="w-full">Save Provider</Button>
+                <Button onClick={handleCreate} className="w-full" data-testid={testIds.providers.saveButton}>Save Provider</Button>
               )}
             </div>
           </DialogContent>
@@ -230,14 +231,14 @@ const detectOllama = async (url?: string) => {
         </div>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-3" data-testid={testIds.providers.list}>
         {providers.length === 0 && (
           <div className="text-center py-10 text-sm text-muted-foreground">
             No additional providers configured. You can already use Lovable AI without any keys.
           </div>
         )}
         {providers.map(p => (
-          <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-soft">
+          <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-soft" data-testid={testIds.providers.row(p.id)}>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-foreground">{p.label}</span>
