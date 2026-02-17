@@ -1,133 +1,142 @@
 
 
-# Agent Memory System and Personal Research Loops
+# Timed Meeting Sessions for Rooms
 
 ## Overview
 
-This plan adds two major capabilities to the agent system:
-
-1. **Agent Memory and File System** - Each agent gets persistent memory (short-term and long-term) and a personal file system for notes, research, and task tracking
-2. **Personal Research Loops** - Before responding in a debate, an agent can run X iterations of private "thinking loops" where they research, take notes, update their memory, and prepare a deeper response
-
-The memories travel with the agent (global scope) but can also be scoped locally to a specific room.
+Add a "Meeting Mode" to rooms that lets you schedule timed conversations with a start time, duration, topic, goals, and attached documents. Agents will be time-aware throughout the session and will automatically deliver closing summaries 5 minutes before the meeting ends. Rooms can be triggered for multiple meetings, each stored as a separate session.
 
 ---
 
-## What You Will See
+## Data Model Changes (`src/types/index.ts`)
 
-- A new **Memory** tab in the Agent editor showing the agent's global memory files
-- In the Room view, a new **"Deep Research"** toggle per agent that lets them run personal loops before responding
-- Inner thoughts will show the agent's research process: what they looked up, what notes they wrote, what memories they consulted
-- When loading an agent into a new room, you can choose to use their **global memories** (carry knowledge across rooms) or start with **local-only memories** (fresh for this room)
+Add a `MeetingSession` interface and extend `Room` with meeting configuration:
+
+```text
+MeetingSession {
+  id: string
+  roomId: string
+  topic: string
+  goals: string
+  additionalInfo: string
+  documents: RoomDocument[]
+  startTime: string (ISO)
+  durationMinutes: number
+  status: 'scheduled' | 'active' | 'wrap-up' | 'ended'
+  createdAt: string
+}
+
+Room (extended fields):
+  meetings: MeetingSession[]  // history of all sessions
+  activeMeetingId?: string    // currently running session
+```
 
 ---
 
-## How It Works (User Perspective)
+## Storage (`src/lib/store.ts`)
 
-1. Create an agent and enable memory
-2. Add the agent to a room
-3. When it is the agent's turn, optionally set "research loops" (e.g., 3 loops)
-4. The agent will privately: read its memories, search the web, write notes to itself, then respond
-5. Move the agent to another room -- their global memories persist, giving them accumulated knowledge
+- Add `getMeetingSessions(roomId)` and `saveMeetingSession(session)` helpers using localStorage (key: `br_meetings`).
+- Add `getActiveMeeting(roomId)` convenience function.
+
+---
+
+## Meeting Setup UI (`src/pages/RoomView.tsx`)
+
+Add a "Start Meeting" button in the room header that opens a dialog with:
+
+- **Topic** (text input) -- pre-filled from room title
+- **Goals** (textarea) -- pre-filled from room goal
+- **Additional Information** (textarea) -- free-form context
+- **Start Time** -- date/time picker (default: "now")
+- **Duration** -- select dropdown (15, 30, 45, 60, 90, 120 min)
+- **Documents** -- file upload area (reuses existing upload logic)
+
+The dialog creates a `MeetingSession`, stores it, and sets it as `activeMeetingId` on the room. Previous meetings remain accessible in a "Past Meetings" section.
+
+---
+
+## Meeting Timer & Status Bar (`src/pages/RoomView.tsx`)
+
+When a meeting is active, display a persistent timer bar below the room header showing:
+
+- Meeting topic
+- Elapsed time / total duration (e.g., "23:45 / 60:00")
+- Time remaining with color coding:
+  - Green: > 10 minutes left
+  - Yellow: 5-10 minutes left
+  - Red: < 5 minutes left (wrap-up phase)
+- A "End Meeting" button
+
+Use a `useEffect` with a 1-second interval to update the timer. When remaining time hits 5 minutes, set meeting status to `wrap-up`.
+
+---
+
+## Time-Aware Agent Prompts (`src/lib/llm.ts`)
+
+Modify `buildSystemMessage` and `callAgent` to accept an optional meeting context:
+
+- Inject meeting metadata into the system prompt:
+  ```
+  --- MEETING CONTEXT ---
+  Topic: [topic]
+  Goals: [goals]
+  Additional Info: [additionalInfo]
+  Time Remaining: [X] minutes of [Y] total
+  Phase: [active / wrap-up]
+  --- END MEETING CONTEXT ---
+  ```
+
+- During **active phase**: append instruction like "You have [X] minutes remaining. Structure your arguments accordingly -- be thorough but mindful of time."
+
+- During **wrap-up phase** (last 5 minutes): append instruction like "The meeting ends in [X] minutes. Focus on summarizing your position and key takeaways rather than introducing new arguments."
+
+The `callAgent` function signature will accept an optional `meetingContext` parameter, and `RoomView` will compute and pass it on each agent call.
+
+---
+
+## Auto-Summary at Wrap-Up (`src/pages/RoomView.tsx`)
+
+When the timer enters wrap-up phase (5 min remaining):
+
+1. Insert a system message: "Meeting entering final phase -- 5 minutes remaining. Each agent will now summarize their position."
+2. Automatically trigger each agent in sequence to deliver a closing summary. The prompt override for this final round:
+   ```
+   The meeting is ending. Provide your CLOSING SUMMARY:
+   1. Your key position and conclusions on the topic
+   2. Points of agreement/disagreement with other agents
+   3. Recommended next steps from your perspective
+   
+   Draw on your persona, expertise, and memory. Be concise -- this is your final statement.
+   ```
+3. After all agents have summarized, insert a system message: "Meeting ended" and set meeting status to `ended`.
+
+---
+
+## Re-Triggering Rooms (Multiple Sessions)
+
+- The "Start Meeting" button is always available (not disabled after one meeting).
+- Each meeting creates a new `MeetingSession` with its own ID.
+- A "Past Meetings" collapsible section in the right panel shows previous sessions with their topic, date, duration, and status.
+- Clicking a past meeting could scroll to or filter messages from that session's timeframe (messages have timestamps that can be matched).
 
 ---
 
 ## Technical Details
 
-### 1. New Data Types
+### Files to Create
+- None (all changes fit in existing files)
 
-Add to `src/types/index.ts`:
+### Files to Modify
+1. **`src/types/index.ts`** -- Add `MeetingSession` interface, extend `Room`
+2. **`src/lib/store.ts`** -- Add meeting session storage helpers
+3. **`src/pages/RoomView.tsx`** -- Meeting setup dialog, timer bar, wrap-up auto-trigger logic, past meetings panel
+4. **`src/lib/llm.ts`** -- Accept and inject meeting context into agent system prompts
+5. **`src/pages/Dashboard.tsx`** -- Show active meeting indicator on room cards
 
-- `AgentMemoryFile` -- represents a single memory/note file with id, agentId, scope (global or roomId), filename, content, category (memory/research/task/note), timestamps
-- Update `Agent` type to include `researchLoops: number` (default 0) and `memoryScope` preference
-
-### 2. Memory Storage Layer
-
-Add `src/lib/agentMemory.ts`:
-
-- Store memory files in localStorage under `br_agent_memory` key
-- CRUD operations: `getAgentMemories(agentId, scope)`, `writeMemoryFile(...)`, `readMemoryFile(...)`, `deleteMemoryFile(...)`
-- Scope filtering: "global" files belong to the agent everywhere; room-scoped files are specific to one room
-- Categories: `long-term-memory`, `short-term-memory`, `research-notes`, `task-status`, `scratch-pad`
-
-### 3. Personal Research Loop (in `src/lib/llm.ts`)
-
-Modify `callAgent` to support multiple private loops before the public response:
-
-```text
-For each loop iteration (1 to N):
-  1. Read agent's existing memories (global + room-local)
-  2. Call LLM with special "research mode" system prompt
-  3. LLM returns structured actions: WRITE_MEMORY, READ_MEMORY, SEARCH_WEB, THINK
-  4. Execute actions (write notes, do searches, update task files)
-  5. Append iteration summary to innerThoughts
-After all loops:
-  6. Final public response pass (existing Pass 2) with all accumulated context
-```
-
-The research loop prompt instructs the agent to:
-- Review what it knows and identify gaps
-- Use web search if permitted
-- Write findings to memory files
-- Update task/status tracking files
-- Prepare structured notes for the final response
-
-### 4. Memory-Aware System Prompts
-
-Update `buildSystemMessage` in `src/lib/llm.ts`:
-- Inject agent's relevant memories into the system prompt context
-- Add instructions for the agent about available memory operations
-- Include memory file listing so the agent knows what notes it has
-
-### 5. UI Changes
-
-**Agent Editor (`src/pages/AgentsPage.tsx`)**:
-- Add "Research Loops" slider (0-5) in advanced settings
-- Add "Memory Scope Default" selector: Global / Local / Both
-- Add a "View Memories" button that opens a panel showing all the agent's memory files with ability to view/delete
-
-**Room View (`src/pages/RoomView.tsx`)**:
-- Add per-agent "loops" indicator next to the "Speak now" button
-- Show a progress indicator during research loops ("Loop 2/3: Researching...")
-- Enhanced inner thoughts display showing each loop's activity with clear labels
-- Add memory scope toggle in the room's agent panel: "Use global memories" checkbox per agent
-
-**New Component: `src/components/AgentMemoryPanel.tsx`**:
-- Displays memory files organized by category
-- Shows file content in a collapsible view
-- Allows manual editing/deletion of memory files
-- Filter by scope (global vs room-local)
-
-### 6. Memory File Format
-
-Each memory file stored as:
-
-```text
-{
-  id: string,
-  agentId: string,
-  scope: "global" | roomId,
-  filename: string,          // e.g. "long-term-memory.md"
-  category: "long-term" | "short-term" | "research" | "task" | "scratch",
-  content: string,           // markdown content
-  createdAt: string,
-  updatedAt: string
-}
-```
-
-### 7. Implementation Order
-
-1. Types and memory storage layer (`types/index.ts`, `lib/agentMemory.ts`)
-2. Research loop logic in `lib/llm.ts`
-3. Agent editor UI updates for loop config and memory viewer
-4. Room view UI updates for loop progress and memory scope
-5. AgentMemoryPanel component
-
-### 8. Edge Cases Handled
-
-- Agent with 0 loops: behaves exactly as today (no change to existing flow)
-- Empty memories: agent starts fresh, first loop creates initial notes
-- Room-local vs global: merges both scopes, clearly labeled in context
-- Loop interruption: if auto-run is stopped mid-loop, partial notes are still saved
-- Memory size: individual files capped at 10,000 chars; old short-term memories auto-pruned when exceeding 20 files
+### Key Implementation Considerations
+- Timer uses `setInterval(1000)` with cleanup in `useEffect` return
+- Meeting context is computed fresh before each `callAgent` call so time remaining is accurate
+- Wrap-up auto-summary runs agents sequentially (reusing `triggerAgent` logic) with a modified prompt
+- Documents attached during meeting setup are merged into the room's document list
+- All meeting data persists in localStorage following existing patterns
 
