@@ -892,19 +892,26 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                 <div className={`animate-fade-in ${isUser ? 'flex justify-end' : ''}`}>
                 <div className={`max-w-[85%] rounded-lg px-3 py-2.5 text-sm ${
                   isUser
-                    ? 'bg-primary text-primary-foreground ml-auto'
+                    ? 'bg-secondary text-white ml-auto'
                     : isSystem
                     ? 'bg-muted/60 border border-dashed border-muted-foreground/30 text-center mx-auto'
                     : isSummarizer
                     ? 'bg-accent/10 border border-accent/20'
+                    : agent
+                    ? `border border-border`
                     : 'bg-card border border-border'
-                }`}>
+                }`}
+                  style={agent ? {
+                    backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}) / 0.12)`,
+                    borderColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}) / 0.3)`,
+                  } : undefined}
+                >
                   {agent && (
                     <div className="flex items-center gap-2 mb-1.5">
                       <div className={`h-5 w-5 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[10px] font-bold text-primary-foreground`}>
                         {agent.name[0]}
                       </div>
-                      <span className="font-medium text-xs">{agent.name}</span>
+                      <span className="font-semibold text-xs" style={{ color: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>{agent.name}</span>
                       <span className="text-[10px] text-muted-foreground">{agent.role}</span>
                     </div>
                   )}
