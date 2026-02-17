@@ -1,8 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 
 const AI_BASE_URL = Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1";
 const CODE_EXECUTION_MODE = Deno.env.get("CODE_EXECUTION_MODE") || "sandbox-http";
 const SANDBOX_EXECUTOR_URL = Deno.env.get("SANDBOX_EXECUTOR_URL") || "http://localhost:8787/execute";
+const AGENT_FILES_ROOT = Deno.env.get("AGENT_FILES_ROOT") || "/tmp/idea-forge-agent-files";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,6 +50,40 @@ const CODE_EXECUTION_TOOL = {
         },
       },
       required: ["code"],
+      additionalProperties: false,
+    },
+  },
+};
+
+
+const FILE_READ_TOOL = {
+  type: "function",
+  function: {
+    name: "file_read",
+    description: "Read a UTF-8 text file from the local agent workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative path to file (example: notes/todo.md)" },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const FILE_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: "file_write",
+    description: "Write UTF-8 text content to a file in the local agent workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative path to file (example: notes/todo.md)" },
+        content: { type: "string", description: "Text content to write" },
+      },
+      required: ["path", "content"],
       additionalProperties: false,
     },
   },
@@ -288,6 +324,31 @@ async function executeCode(code: string): Promise<string> {
   }
 }
 
+
+function sanitizeRelativePath(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) throw new Error('Invalid path');
+  return normalized;
+}
+
+async function readAgentFile(relPath: string): Promise<string> {
+  const safe = sanitizeRelativePath(relPath);
+  const full = `${AGENT_FILES_ROOT}/${safe}`;
+  const stat = await Deno.stat(full).catch(() => null);
+  if (!stat || !stat.isFile) return `File not found: ${safe}`;
+  const content = await Deno.readTextFile(full);
+  return content;
+}
+
+async function writeAgentFile(relPath: string, content: string): Promise<string> {
+  const safe = sanitizeRelativePath(relPath);
+  const full = `${AGENT_FILES_ROOT}/${safe}`;
+  const dir = full.split('/').slice(0, -1).join('/');
+  await ensureDir(dir);
+  await Deno.writeTextFile(full, content);
+  return `Wrote ${safe} (${content.length} chars)`;
+}
+
 // MCP session cache to avoid re-initializing every call
 const mcpSessions = new Map<string, string | null>();
 
@@ -468,6 +529,8 @@ serve(async (req) => {
     
     if (enabledSet.has("web_search")) tools.push(WEB_SEARCH_TOOL);
     if (enabledSet.has("code_execution")) tools.push(CODE_EXECUTION_TOOL);
+    if (enabledSet.has("file_read")) tools.push(FILE_READ_TOOL);
+    if (enabledSet.has("file_write")) tools.push(FILE_WRITE_TOOL);
     if (enabledSet.has("mcp_call") && Array.isArray(mcp_servers) && mcp_servers.length > 0) {
       // Add individual MCP tools with server context
       for (const server of mcp_servers) {
@@ -594,6 +657,15 @@ serve(async (req) => {
           console.log(`💻 Agent executing code (${(args.language || 'js')}): ${code.slice(0, 100)}...`);
           toolResult = await executeCode(code);
           toolCallsMade.push({ tool: "code_execution", query: code.slice(0, 200), result: toolResult, sources: [] });
+        } else if (fnName === "file_read") {
+          const relPath = String(args.path || "");
+          toolResult = await readAgentFile(relPath);
+          toolCallsMade.push({ tool: "file_read", query: relPath, result: toolResult, sources: [AGENT_FILES_ROOT] });
+        } else if (fnName === "file_write") {
+          const relPath = String(args.path || "");
+          const content = String(args.content || "");
+          toolResult = await writeAgentFile(relPath, content);
+          toolCallsMade.push({ tool: "file_write", query: relPath, result: toolResult, sources: [AGENT_FILES_ROOT] });
         } else if (fnName === "mcp_call") {
           const serverUrl = args.server_url || "";
           const toolName = args.tool_name || "";

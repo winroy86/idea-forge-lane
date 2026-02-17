@@ -46,6 +46,21 @@ if contains "case 'ollama':" src/lib/llm.ts; then pass "Ollama path available"; 
 if contains "case 'azure':" src/lib/llm.ts; then pass "Azure path available"; else warn "Azure path missing"; fi
 
 # 3) MCP, tools, and file/memory features
+if has_file "server/index.js" && has_file "server/package.json"; then
+  pass "Backend skeleton exists (Express + SQLite + auth/session endpoints)"
+else
+  warn "Backend skeleton missing"
+fi
+if contains 'name: "file_read"' supabase/functions/agent-chat/index.ts && contains 'name: "file_write"' supabase/functions/agent-chat/index.ts; then
+  pass "Agent file read/write tools are wired in edge runtime"
+else
+  warn "Agent file read/write tools missing"
+fi
+if contains "toolsEnabled.push('file_read')" src/lib/llm.ts && contains "toolsEnabled.push('file_write')" src/lib/llm.ts; then
+  pass "Frontend runtime requests file read/write tools from agent permissions"
+else
+  warn "Frontend runtime file tool flags missing"
+fi
 if contains "function callAzureOpenAI(" src/lib/llm.ts && contains "api-version=" src/lib/llm.ts; then
   pass "Azure OpenAI uses provider-specific endpoint format (api-version + deployment)"
 else

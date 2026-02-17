@@ -316,6 +316,12 @@ export async function callAgent(
   if (agent.permissions?.codeExecution) {
     toolsEnabled.push('code_execution');
   }
+  if (agent.permissions?.fileRead) {
+    toolsEnabled.push('file_read');
+  }
+  if (agent.permissions?.fileWrite) {
+    toolsEnabled.push('file_write');
+  }
   const mcpServers = (agent.mcpServers || []).filter(s => s.enabled);
   if (mcpServers.length > 0) {
     toolsEnabled.push('mcp_call');
@@ -467,6 +473,8 @@ Be honest and analytical in your thinking. This is your private space.`;
   const toolDescriptions: string[] = [];
   if (toolsEnabled.includes('web_search')) toolDescriptions.push('- web_search: Search the internet for current information.');
   if (toolsEnabled.includes('code_execution')) toolDescriptions.push('- code_execution: Execute JavaScript code for calculations and data processing. When you use code execution, include the code and results in your response using markdown code blocks so the group can see your work.');
+  if (toolsEnabled.includes('file_read')) toolDescriptions.push('- file_read: Read files from the local agent workspace path.');
+  if (toolsEnabled.includes('file_write')) toolDescriptions.push('- file_write: Write files to the local agent workspace path.');
   if (toolsEnabled.includes('mcp_call')) {
     const mcpNames = (agent.mcpServers || []).filter(s => s.enabled).map(s => `${s.name} (${s.tools.join(', ') || 'generic'})`);
     toolDescriptions.push(`- MCP tools: ${mcpNames.join('; ')}`);

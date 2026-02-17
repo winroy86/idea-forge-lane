@@ -60,6 +60,24 @@ The app header includes a **Capabilities** indicator showing which of these are 
 
 ## Capability matrix (current)
 
+
+### Optional backend skeleton (SQLite + session auth)
+
+A backend foundation is available under `server/` with:
+- SQLite persistence
+- `/health` and `/ready`
+- session auth endpoints (`/api/login`, `/api/logout`, `/api/session`)
+- basic room API (`/api/rooms`)
+
+Run it:
+
+```sh
+cd server
+npm install
+AUTH_ENABLED=true ADMIN_PASSWORD=change-me SESSION_SECRET=change-me npm start
+```
+
+
 ### LLM providers
 - OpenAI: supported
 - Anthropic: supported
@@ -74,7 +92,7 @@ The app header includes a **Capabilities** indicator showing which of these are 
 - Web search tool flag: enabled in runtime pipeline
 - Code execution tool flag: enabled in runtime pipeline
 - Memory read/write (short-term + long-term summary): enabled
-- File read/file write: represented in permissions schema; full sandboxed local filesystem tooling is not yet implemented in this frontend runtime
+- File read/file write: available via `file_read` and `file_write` tools in the edge runtime (writes are constrained to `AGENT_FILES_ROOT`)
 
 
 ### Local code execution sandbox (for agent code tool)
