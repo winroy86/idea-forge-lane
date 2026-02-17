@@ -40,6 +40,66 @@ import { Label } from '@/components/ui/label';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
+interface MeetingTemplate {
+  name: string;
+  icon: string;
+  topic: string;
+  goals: string;
+  additionalInfo: string;
+  duration: string;
+}
+
+const MEETING_TEMPLATES: MeetingTemplate[] = [
+  {
+    name: 'Brainstorm',
+    icon: '💡',
+    topic: 'Brainstorming Session',
+    goals: 'Generate creative ideas and explore unconventional approaches. Quantity over quality — diverge first, converge later.',
+    additionalInfo: 'Encourage wild ideas. No criticism during ideation phase. Build on each other\'s suggestions.',
+    duration: '30',
+  },
+  {
+    name: 'Sprint Retro',
+    icon: '🔄',
+    topic: 'Sprint Retrospective',
+    goals: 'Identify what went well, what didn\'t, and actionable improvements for the next sprint.',
+    additionalInfo: 'Focus on processes, not people. Be specific with examples. Prioritize the top 3 action items.',
+    duration: '45',
+  },
+  {
+    name: 'Design Review',
+    icon: '🎨',
+    topic: 'Design Review',
+    goals: 'Evaluate the current design approach, identify usability issues, and align on visual direction.',
+    additionalInfo: 'Consider accessibility, consistency with design system, and user journey impact.',
+    duration: '30',
+  },
+  {
+    name: 'Strategy',
+    icon: '🎯',
+    topic: 'Strategic Planning',
+    goals: 'Define priorities, assess risks and opportunities, and establish a clear action plan with owners and deadlines.',
+    additionalInfo: 'Consider market trends, competitive landscape, and resource constraints.',
+    duration: '60',
+  },
+  {
+    name: 'Debate',
+    icon: '⚔️',
+    topic: 'Structured Debate',
+    goals: 'Explore opposing viewpoints on a key decision. Each side presents evidence, rebuts, and finds common ground.',
+    additionalInfo: 'Steel-man opposing arguments. Focus on evidence and logic over rhetoric.',
+    duration: '30',
+  },
+  {
+    name: 'Decision',
+    icon: '✅',
+    topic: 'Decision Meeting',
+    goals: 'Evaluate options against criteria, surface trade-offs, and commit to a clear decision with rationale documented.',
+    additionalInfo: 'List options upfront. Use explicit criteria. Assign a decision owner.',
+    duration: '15',
+  },
+];
+
 function getAgentColor(index: number) {
   return AGENT_COLORS[index % AGENT_COLORS.length];
 }
@@ -671,6 +731,27 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   <DialogTitle className="flex items-center gap-2"><Timer className="h-4 w-4" /> Start a Timed Meeting</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 pt-2">
+                  {/* Meeting Templates */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Quick Templates</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {MEETING_TEMPLATES.map(tpl => (
+                        <button
+                          key={tpl.name}
+                          onClick={() => {
+                            setMeetingTopic(tpl.topic);
+                            setMeetingGoals(tpl.goals);
+                            setMeetingAdditionalInfo(tpl.additionalInfo);
+                            setMeetingDuration(tpl.duration);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/10 hover:border-accent/40 transition-colors"
+                        >
+                          <span>{tpl.icon}</span>
+                          <span>{tpl.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div>
                     <Label htmlFor="meeting-topic">Topic</Label>
                     <Input id="meeting-topic" value={meetingTopic} onChange={e => setMeetingTopic(e.target.value)} placeholder="Meeting topic" />
