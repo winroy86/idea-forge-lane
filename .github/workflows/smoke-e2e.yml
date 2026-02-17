@@ -1,0 +1,44 @@
+name: smoke-e2e
+
+on:
+  pull_request:
+
+jobs:
+  smoke-e2e:
+    runs-on: ubuntu-latest
+    env:
+      AUTH_ENABLED: 'true'
+      E2E_BASE_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright test runner
+        run: npm install --no-save @playwright/test
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Start frontend
+        run: npm run dev -- --host 0.0.0.0 --port 8080 > /tmp/frontend.log 2>&1 &
+
+
+      - name: Wait for frontend
+        run: |
+          for i in {1..30}; do
+            if curl -fsS "$E2E_BASE_URL" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Frontend failed to start"
+          cat /tmp/frontend.log
+          exit 1
+      - name: Run smoke e2e tests
+        run: npx playwright test playwright/tests/auth-providers.smoke.spec.ts
