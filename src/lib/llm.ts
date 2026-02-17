@@ -2,6 +2,7 @@ import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlo
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
+import { waitForProviderHydration } from '@/lib/providerHydration';
 
 interface LLMResponse {
   content: string;
@@ -295,6 +296,7 @@ export async function callAgent(
   onLoopProgress?: (progress: ResearchLoopProgress) => void,
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
+  await waitForProviderHydration();
   if (agent.config.provider !== 'lovable') {
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
     if (!provider) {
@@ -641,6 +643,8 @@ export async function callSummarizer(
   messages: Message[],
   allAgents: Agent[],
 ): Promise<LLMResponse> {
+  await waitForProviderHydration();
+
   // Prefer Lovable AI for summarizer (no API key needed)
   const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
   const providers = getProviders().filter(p => p.isActive);

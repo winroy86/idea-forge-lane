@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
+import { waitForProviderHydration } from '@/lib/providerHydration';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { testIds } from '@/testIds';
@@ -65,7 +66,11 @@ export default function ProvidersPage() {
   }, [newProvider, open]);
 
   const refresh = () => setProviders(getProviders());
-  useEffect(refresh, []);
+
+  useEffect(() => {
+    refresh();
+    waitForProviderHydration().then(refresh);
+  }, []);
 
   const handleCreate = () => {
     const p: ProviderConfig = {
