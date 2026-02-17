@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "smoke:prod": "npm run build && vite preview --host 0.0.0.0 --port 4173"
+    "smoke:prod": "npm run build && vite preview --host 0.0.0.0 --port 4173",
+    "test:e2e": "npx playwright test",
+    "test:e2e:auth": "AUTH_ENABLED=true npx playwright test"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
