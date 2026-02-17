@@ -1106,12 +1106,18 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
             </button>
             {showPastMeetings && (
               <div className="mt-2 space-y-1.5">
-                {pastMeetings.map(m => (
+                {pastMeetings.slice(0, 5).map(m => (
                   <div key={m.id} className="rounded border border-border p-2 bg-muted/20">
                     <p className="text-[10px] font-medium text-foreground truncate">{m.topic}</p>
                     <p className="text-[9px] text-muted-foreground">{m.durationMinutes}min • {new Date(m.createdAt).toLocaleDateString()}</p>
                   </div>
                 ))}
+                <button
+                  onClick={() => navigate(`/room/${room.id}/history`)}
+                  className="w-full text-center text-[10px] text-accent hover:underline mt-1"
+                >
+                  View Full History →
+                </button>
               </div>
             )}
           </div>
