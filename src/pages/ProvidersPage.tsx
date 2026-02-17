@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
+import { hydrateProvidersFromServer, syncProviderToServer, deleteProviderFromServer } from '@/lib/storageAdapter';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -63,10 +64,19 @@ export default function ProvidersPage() {
     }
   }, [newProvider, open]);
 
-  const refresh = () => setProviders(getProviders());
-  useEffect(refresh, []);
+  const refreshLocal = () => setProviders(getProviders());
 
-  const handleCreate = () => {
+  const refresh = async () => {
+    await hydrateProvidersFromServer();
+    refreshLocal();
+  };
+
+  useEffect(() => {
+    refreshLocal();
+    void refresh();
+  }, []);
+
+  const handleCreate = async () => {
     const p: ProviderConfig = {
       id: generateId(),
       provider: newProvider,
@@ -76,11 +86,12 @@ export default function ProvidersPage() {
       isActive: true,
     };
     upsertProvider(p);
+    void syncProviderToServer(p);
     setOpen(false);
     setNewKey('');
     setNewLabel('');
     setNewBaseUrl('');
-    refresh();
+    await refresh();
   };
 
   return (
@@ -184,8 +195,15 @@ export default function ProvidersPage() {
               </div>
               {p.baseUrl && <div className="text-[10px] text-muted-foreground mt-0.5">{p.baseUrl}</div>}
             </div>
-            <Switch checked={p.isActive} onCheckedChange={v => { upsertProvider({ ...p, isActive: v }); refresh(); }} />
-            <button onClick={() => { deleteProvider(p.id); refresh(); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+            <Switch checked={p.isActive} onCheckedChange={v => {
+              const updated = { ...p, isActive: v };
+              upsertProvider(updated);
+              void syncProviderToServer(updated).then(() => refresh());
+            }} />
+            <button onClick={() => {
+              deleteProvider(p.id);
+              void deleteProviderFromServer(p.id).then(() => refresh());
+            }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
@@ -194,7 +212,7 @@ export default function ProvidersPage() {
 
       <div className="mt-8 rounded-lg border border-border bg-muted/50 p-4">
         <p className="text-xs text-muted-foreground">
-          <strong>Note:</strong> API keys are stored in your browser's localStorage. In a production setup, these would be encrypted and stored in Docker secrets or a .env file. This frontend is designed to be connected to a self-hosted backend.
+          <strong>Note:</strong> When a backend API is configured, provider settings are synced to the server and API keys are encrypted at rest. Without a backend, settings are kept in browser localStorage.
         </p>
       </div>
     </div>
