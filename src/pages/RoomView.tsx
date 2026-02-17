@@ -101,6 +101,7 @@ export default function RoomView() {
   const autoRunningRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<Message[]>([]);
   const { toast } = useToast();
 
   // Meeting state
@@ -131,6 +132,11 @@ export default function RoomView() {
       wrapUpTriggeredRef.current = active.status === 'wrap-up';
     }
   }, [id, navigate]);
+
+  // Keep messagesRef in sync
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -336,8 +342,11 @@ export default function RoomView() {
     try {
       const meetingCtx = getMeetingContextNow();
 
+      // Always read the latest messages from ref to avoid stale closures
+      const currentMessages = messagesRef.current;
+
       // If there's a prompt override (e.g. wrap-up), inject as a user message temporarily
-      let messagesForCall = messages;
+      let messagesForCall = currentMessages;
       if (promptOverride) {
         const overrideMsg: Message = {
           id: 'temp-override',
@@ -347,7 +356,7 @@ export default function RoomView() {
           content: promptOverride,
           timestamp: new Date().toISOString(),
         };
-        messagesForCall = [...messages, overrideMsg];
+        messagesForCall = [...currentMessages, overrideMsg];
       }
 
       const result = await callAgent(agent, messagesForCall, allAgents, room.documents || [], room.id, (progress) => {
