@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -442,11 +443,40 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
+    const { providerId, provider, base_url, messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    if (!supabaseUrl || !serviceRole) throw new Error("Supabase env not configured");
+
+    const authHeader = req.headers.get("Authorization") || "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    const admin = createClient(supabaseUrl, serviceRole);
+
+    let requestProvider = provider || "lovable";
+    let resolvedApiKey = Deno.env.get("LOVABLE_API_KEY") || "";
+    let resolvedBaseUrl = base_url || "";
+
+    if (requestProvider !== "lovable") {
+      if (!token) throw new Error("Unauthorized");
+      const { data: userData, error: userErr } = await admin.auth.getUser(token);
+      if (userErr || !userData.user) throw new Error("Unauthorized");
+
+      const query = admin
+        .from("user_provider_credentials")
+        .select("id, provider, base_url, api_key, is_active")
+        .eq("user_id", userData.user.id)
+        .eq("is_active", true);
+
+      const credentialQuery = providerId ? query.eq("id", providerId).maybeSingle() : query.eq("provider", requestProvider).limit(1).maybeSingle();
+      const { data: credential, error: credentialError } = await credentialQuery;
+      if (credentialError) throw credentialError;
+      if (!credential) throw new Error("Provider credential not found");
+
+      requestProvider = credential.provider;
+      resolvedApiKey = credential.api_key;
+      resolvedBaseUrl = credential.base_url || resolvedBaseUrl;
     }
 
     // Populate MCP auth configs from incoming server data
@@ -507,10 +537,14 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    let response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const providerUrl = requestProvider === "lovable"
+      ? "https://ai.gateway.lovable.dev/v1/chat/completions"
+      : `${(resolvedBaseUrl || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`;
+
+    let response = await fetch(providerUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${resolvedApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -522,10 +556,10 @@ serve(async (req) => {
       const bodyNoTools = { ...body };
       delete bodyNoTools.tools;
       delete bodyNoTools.tool_choice;
-      response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      response = await fetch(providerUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${resolvedApiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(bodyNoTools),
@@ -583,7 +617,7 @@ serve(async (req) => {
         if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
-          const searchResult = await performWebSearch(query, LOVABLE_API_KEY);
+          const searchResult = await performWebSearch(query, resolvedApiKey);
           toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
           toolResult = searchResult.result;
         } else if (fnName === "code_execution") {
@@ -618,10 +652,10 @@ serve(async (req) => {
       }
 
       body.messages = updatedMessages;
-      const followUp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const followUp = await fetch(providerUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${resolvedApiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -641,7 +675,14 @@ serve(async (req) => {
       data._toolCallsMade = toolCallsMade;
     }
 
-    return new Response(JSON.stringify(data), {
+    const normalized = {
+      content: data.choices?.[0]?.message?.content || "",
+      usage: data.usage,
+      toolCallsMade,
+      raw: data,
+    };
+
+    return new Response(JSON.stringify(normalized), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

@@ -19,6 +19,7 @@ const KEYS = {
   messages: 'br_messages',
   providers: 'br_providers',
   meetings: 'br_meetings',
+  localDevMode: 'br_local_dev_mode',
 };
 
 // Rooms
@@ -83,3 +84,8 @@ export const getActiveMeeting = (roomId: string): MeetingSession | undefined => 
 
 // Utility
 export const generateId = () => crypto.randomUUID();
+
+
+// Credentials mode
+export const getLocalDevMode = (): boolean => load(KEYS.localDevMode, false);
+export const setLocalDevMode = (enabled: boolean) => save(KEYS.localDevMode, enabled);

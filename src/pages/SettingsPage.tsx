@@ -57,7 +57,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              All data is currently stored in your browser's localStorage. In the Docker deployment, data will be persisted to a mounted volume at <code className="font-mono bg-muted px-1 rounded">/data</code>.
+              Most app data is currently stored in your browser's localStorage. Provider API secrets are server-side by default unless Local-dev mode is enabled.
             </p>
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               Clear All Data
