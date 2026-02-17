@@ -32,11 +32,44 @@ CREATE TABLE IF NOT EXISTS rooms (
   payload TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS providers (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  label TEXT NOT NULL,
+  api_key_encrypted TEXT NOT NULL,
+  base_url TEXT,
+  is_active INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+
+
+function getAesKey() {
+  return crypto.createHash('sha256').update(SESSION_SECRET).digest();
+}
+
+function encryptText(plain) {
+  const iv = crypto.randomBytes(12);
+  const key = getAesKey();
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+function decryptText(payload) {
+  const [ivHex, tagHex, dataHex] = String(payload || '').split(':');
+  if (!ivHex || !tagHex || !dataHex) return '';
+  const key = getAesKey();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+  const out = Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]);
+  return out.toString('utf8');
+}
 
 function getPasswordHash() {
   const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get('admin_password_hash');
@@ -124,6 +157,37 @@ app.delete('/api/rooms/:id', requireSession, (req, res) => {
   res.json({ ok: true });
 });
 
+
+
+app.get('/api/providers', requireSession, (_req, res) => {
+  const rows = db.prepare('SELECT * FROM providers ORDER BY updated_at DESC').all();
+  const providers = rows.map((r) => ({
+    id: r.id,
+    provider: r.provider,
+    label: r.label,
+    apiKey: decryptText(r.api_key_encrypted),
+    baseUrl: r.base_url || undefined,
+    isActive: Boolean(r.is_active),
+  }));
+  res.json(providers);
+});
+
+app.post('/api/providers', requireSession, (req, res) => {
+  const p = req.body || {};
+  if (!p.id || !p.provider || !p.label) return res.status(400).json({ error: 'Invalid provider payload' });
+  const encryptedKey = encryptText(String(p.apiKey || ''));
+  db.prepare(`INSERT OR REPLACE INTO providers(id, provider, label, api_key_encrypted, base_url, is_active, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(p.id, p.provider, p.label, encryptedKey, p.baseUrl || null, p.isActive ? 1 : 0, new Date().toISOString());
+  res.json({ ok: true });
+});
+
+app.delete('/api/providers/:id', requireSession, (req, res) => {
+  const id = String(req.params.id || '');
+  if (!id) return res.status(400).json({ error: 'Missing provider id' });
+  db.prepare('DELETE FROM providers WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
 
 ensurePasswordSetFromEnv().finally(() => {
   app.listen(PORT, HOST, () => {
