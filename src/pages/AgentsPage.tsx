@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X } from 'lucide-react';
-import { Agent, AgentConfig, LLMProvider, McpServerConfig } from '@/types';
+import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
@@ -90,6 +90,9 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [ollamaLoading, setOllamaLoading] = useState(false);
   const [mcpUrl, setMcpUrl] = useState('');
   const [mcpDiscovering, setMcpDiscovering] = useState(false);
+  const [mcpAuthType, setMcpAuthType] = useState<McpAuthType>('none');
+  const [mcpAuthToken, setMcpAuthToken] = useState('');
+  const [mcpAuthHeader, setMcpAuthHeader] = useState('');
 
   useEffect(() => {
     if (form.config.provider === 'ollama') {
@@ -280,139 +283,189 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
               <p className="text-[10px] text-muted-foreground mb-2">Connect external tool servers via Model Context Protocol</p>
               
               {(form.mcpServers || []).map((mcp) => (
-                <div key={mcp.id} className="flex items-center gap-2 mb-2 rounded border border-border p-2 bg-muted/30">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{mcp.name || mcp.url}</p>
-                    <p className="text-[10px] text-muted-foreground truncate">{mcp.url}</p>
-                    {mcp.tools.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {mcp.tools.map(t => (
-                          <span key={t} className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent">{t}</span>
-                        ))}
-                      </div>
-                    )}
+                <div key={mcp.id} className="mb-2 rounded border border-border p-2 bg-muted/30">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-foreground truncate">{mcp.name || mcp.url}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">{mcp.url}</p>
+                      {mcp.tools.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {mcp.tools.map(t => (
+                            <span key={t} className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent">{t}</span>
+                          ))}
+                        </div>
+                      )}
+                      {mcp.authType && mcp.authType !== 'none' && (
+                        <p className="text-[9px] text-muted-foreground mt-1">🔑 {mcp.authType === 'bearer' ? 'Bearer Token' : `API Key (${mcp.authHeader || 'Authorization'})`}</p>
+                      )}
+                    </div>
+                    <Switch
+                      checked={mcp.enabled}
+                      onCheckedChange={v => {
+                        const servers = (form.mcpServers || []).map(s => s.id === mcp.id ? { ...s, enabled: v } : s);
+                        update({ mcpServers: servers });
+                      }}
+                    />
+                    <button
+                      onClick={() => update({ mcpServers: (form.mcpServers || []).filter(s => s.id !== mcp.id) })}
+                      className="text-muted-foreground hover:text-destructive p-0.5"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   </div>
-                  <Switch
-                    checked={mcp.enabled}
-                    onCheckedChange={v => {
-                      const servers = (form.mcpServers || []).map(s => s.id === mcp.id ? { ...s, enabled: v } : s);
-                      update({ mcpServers: servers });
-                    }}
-                  />
-                  <button
-                    onClick={() => update({ mcpServers: (form.mcpServers || []).filter(s => s.id !== mcp.id) })}
-                    className="text-muted-foreground hover:text-destructive p-0.5"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
                 </div>
               ))}
 
-              <div className="flex gap-2">
-                <Input
-                  value={mcpUrl}
-                  onChange={e => setMcpUrl(e.target.value)}
-                  placeholder="https://mcp-server.example.com/mcp"
-                  className="h-7 text-xs flex-1"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1"
-                  disabled={!mcpUrl.trim() || mcpDiscovering}
-                  onClick={async () => {
-                    setMcpDiscovering(true);
-                    try {
-                      // Try to discover tools via MCP protocol with proper initialization
-                      const toolNames: string[] = [];
-                      let serverName = new URL(mcpUrl).hostname;
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <Input
+                    value={mcpUrl}
+                    onChange={e => setMcpUrl(e.target.value)}
+                    placeholder="https://mcp-server.example.com/mcp"
+                    className="h-7 text-xs flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={!mcpUrl.trim() || mcpDiscovering}
+                    onClick={async () => {
+                      setMcpDiscovering(true);
                       try {
-                        // Step 1: Initialize handshake
-                        const initRes = await fetch(mcpUrl, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
-                          body: JSON.stringify({
-                            jsonrpc: '2.0', id: 1, method: 'initialize',
-                            params: {
-                              protocolVersion: '2025-03-26',
-                              capabilities: {},
-                              clientInfo: { name: 'AgentStudio', version: '1.0.0' },
-                            },
-                          }),
-                          signal: AbortSignal.timeout(10000),
-                        });
+                        const toolNames: string[] = [];
+                        let serverName = new URL(mcpUrl).hostname;
 
-                        let sessionId: string | null = null;
-                        if (initRes.ok) {
-                          sessionId = initRes.headers.get('mcp-session-id');
-                          const initData = await initRes.json();
-                          if (initData.result?.serverInfo?.name) {
-                            serverName = initData.result.serverInfo.name;
-                          }
+                        // Build auth headers based on selected auth type
+                        const authHeaders: Record<string, string> = {};
+                        if (mcpAuthType === 'bearer' && mcpAuthToken) {
+                          authHeaders['Authorization'] = `Bearer ${mcpAuthToken}`;
+                        } else if (mcpAuthType === 'api-key' && mcpAuthToken) {
+                          const headerName = mcpAuthHeader || 'Authorization';
+                          authHeaders[headerName] = mcpAuthToken;
+                        }
 
-                          // Step 2: Send initialized notification
-                          const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-                          if (sessionId) notifHeaders['mcp-session-id'] = sessionId;
-                          await fetch(mcpUrl, {
+                        try {
+                          const baseHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', ...authHeaders };
+                          const initRes = await fetch(mcpUrl, {
                             method: 'POST',
-                            headers: notifHeaders,
-                            body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-                            signal: AbortSignal.timeout(5000),
-                          }).catch(() => {});
-
-                          // Step 3: List tools
-                          const listHeaders: Record<string, string> = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
-                          if (sessionId) listHeaders['mcp-session-id'] = sessionId;
-                          const res = await fetch(mcpUrl, {
-                            method: 'POST',
-                            headers: listHeaders,
-                            body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+                            headers: baseHeaders,
+                            body: JSON.stringify({
+                              jsonrpc: '2.0', id: 1, method: 'initialize',
+                              params: {
+                                protocolVersion: '2025-03-26',
+                                capabilities: {},
+                                clientInfo: { name: 'AgentStudio', version: '1.0.0' },
+                              },
+                            }),
                             signal: AbortSignal.timeout(10000),
                           });
-                          if (res.ok) {
-                            const contentType = res.headers.get('content-type') || '';
-                            let data: any;
-                            if (contentType.includes('text/event-stream')) {
-                              // Parse SSE response
-                              const text = await res.text();
-                              const lines = text.split('\n');
-                              for (const line of lines) {
-                                if (line.startsWith('data: ')) {
-                                  try { data = JSON.parse(line.slice(6)); } catch {}
-                                }
-                              }
-                            } else {
-                              data = await res.json();
+
+                          let sessionId: string | null = null;
+                          if (initRes.ok) {
+                            sessionId = initRes.headers.get('mcp-session-id');
+                            const initData = await initRes.json();
+                            if (initData.result?.serverInfo?.name) {
+                              serverName = initData.result.serverInfo.name;
                             }
-                            if (data?.result?.tools) {
-                              for (const t of data.result.tools) {
-                                toolNames.push(t.name);
+
+                            const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders };
+                            if (sessionId) notifHeaders['mcp-session-id'] = sessionId;
+                            await fetch(mcpUrl, {
+                              method: 'POST',
+                              headers: notifHeaders,
+                              body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+                              signal: AbortSignal.timeout(5000),
+                            }).catch(() => {});
+
+                            const listHeaders: Record<string, string> = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', ...authHeaders };
+                            if (sessionId) listHeaders['mcp-session-id'] = sessionId;
+                            const res = await fetch(mcpUrl, {
+                              method: 'POST',
+                              headers: listHeaders,
+                              body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+                              signal: AbortSignal.timeout(10000),
+                            });
+                            if (res.ok) {
+                              const contentType = res.headers.get('content-type') || '';
+                              let data: any;
+                              if (contentType.includes('text/event-stream')) {
+                                const text = await res.text();
+                                const lines = text.split('\n');
+                                for (const line of lines) {
+                                  if (line.startsWith('data: ')) {
+                                    try { data = JSON.parse(line.slice(6)); } catch {}
+                                  }
+                                }
+                              } else {
+                                data = await res.json();
+                              }
+                              if (data?.result?.tools) {
+                                for (const t of data.result.tools) {
+                                  toolNames.push(t.name);
+                                }
                               }
                             }
                           }
+                        } catch {
+                          // Discovery failed, still add the server
                         }
+                        const newServer: McpServerConfig = {
+                          id: generateId(),
+                          name: serverName,
+                          url: mcpUrl.trim(),
+                          tools: toolNames,
+                          enabled: true,
+                          authType: mcpAuthType,
+                          authToken: mcpAuthToken || undefined,
+                          authHeader: mcpAuthType === 'api-key' && mcpAuthHeader ? mcpAuthHeader : undefined,
+                        };
+                        update({ mcpServers: [...(form.mcpServers || []), newServer] });
+                        setMcpUrl('');
+                        setMcpAuthType('none');
+                        setMcpAuthToken('');
+                        setMcpAuthHeader('');
                       } catch {
-                        // Discovery failed, still add the server
+                        // Invalid URL
+                      } finally {
+                        setMcpDiscovering(false);
                       }
-                      const newServer: McpServerConfig = {
-                        id: generateId(),
-                        name: serverName,
-                        url: mcpUrl.trim(),
-                        tools: toolNames,
-                        enabled: true,
-                      };
-                      update({ mcpServers: [...(form.mcpServers || []), newServer] });
-                      setMcpUrl('');
-                    } catch {
-                      // Invalid URL
-                    } finally {
-                      setMcpDiscovering(false);
-                    }
-                  }}
-                >
-                  {mcpDiscovering ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                  Add
-                </Button>
+                    }}
+                  >
+                    {mcpDiscovering ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                    Add
+                  </Button>
+                </div>
+
+                {/* Auth configuration */}
+                <div className="flex gap-2 items-center">
+                  <Select value={mcpAuthType} onValueChange={v => setMcpAuthType(v as McpAuthType)}>
+                    <SelectTrigger className="h-7 text-[10px] w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No Auth</SelectItem>
+                      <SelectItem value="bearer">Bearer Token</SelectItem>
+                      <SelectItem value="api-key">API Key</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {mcpAuthType !== 'none' && (
+                    <Input
+                      value={mcpAuthToken}
+                      onChange={e => setMcpAuthToken(e.target.value)}
+                      type="password"
+                      placeholder={mcpAuthType === 'bearer' ? 'Bearer token…' : 'API key value…'}
+                      className="h-7 text-xs flex-1"
+                    />
+                  )}
+                  {mcpAuthType === 'api-key' && (
+                    <Input
+                      value={mcpAuthHeader}
+                      onChange={e => setMcpAuthHeader(e.target.value)}
+                      placeholder="Header (default: Authorization)"
+                      className="h-7 text-xs w-36"
+                    />
+                  )}
+                </div>
               </div>
             </div>
           </div>

@@ -288,14 +288,32 @@ function executeCode(code: string): string {
 // MCP session cache to avoid re-initializing every call
 const mcpSessions = new Map<string, string | null>();
 
+// Build auth headers for MCP servers
+function getMcpAuthHeaders(serverConfig?: { authType?: string; authToken?: string; authHeader?: string }): Record<string, string> {
+  if (!serverConfig?.authType || serverConfig.authType === 'none' || !serverConfig.authToken) return {};
+  if (serverConfig.authType === 'bearer') {
+    return { 'Authorization': `Bearer ${serverConfig.authToken}` };
+  }
+  if (serverConfig.authType === 'api-key') {
+    const headerName = serverConfig.authHeader || 'Authorization';
+    return { [headerName]: serverConfig.authToken };
+  }
+  return {};
+}
+
+// MCP auth config lookup
+const mcpAuthConfigs = new Map<string, { authType?: string; authToken?: string; authHeader?: string }>();
+
 async function initMcpSession(serverUrl: string): Promise<string | null> {
   if (mcpSessions.has(serverUrl)) return mcpSessions.get(serverUrl) || null;
+
+  const authHeaders = getMcpAuthHeaders(mcpAuthConfigs.get(serverUrl));
 
   try {
     // Step 1: Initialize
     const initRes = await fetch(serverUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', ...authHeaders },
       body: JSON.stringify({
         jsonrpc: '2.0', id: 1, method: 'initialize',
         params: {
@@ -314,11 +332,10 @@ async function initMcpSession(serverUrl: string): Promise<string | null> {
     }
 
     const sessionId = initRes.headers.get('mcp-session-id');
-    // Consume response body
     await initRes.json().catch(() => initRes.text());
 
     // Step 2: Send initialized notification
-    const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    const notifHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders };
     if (sessionId) notifHeaders['mcp-session-id'] = sessionId;
     await fetch(serverUrl, {
       method: 'POST',
@@ -354,10 +371,12 @@ function parseMcpResponse(contentType: string, body: string): any {
 async function callMcpTool(serverUrl: string, toolName: string, args: Record<string, unknown> = {}): Promise<string> {
   try {
     const sessionId = await initMcpSession(serverUrl);
+    const authHeaders = getMcpAuthHeaders(mcpAuthConfigs.get(serverUrl));
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
+      ...authHeaders,
     };
     if (sessionId) headers['mcp-session-id'] = sessionId;
 
@@ -374,13 +393,13 @@ async function callMcpTool(serverUrl: string, toolName: string, args: Record<str
     });
 
     if (!res.ok) {
-      // If session expired, retry with fresh session
       if (res.status === 404 || res.status === 400) {
         mcpSessions.delete(serverUrl);
         const newSessionId = await initMcpSession(serverUrl);
         const retryHeaders: Record<string, string> = {
           'Content-Type': 'application/json',
           'Accept': 'application/json, text/event-stream',
+          ...authHeaders,
         };
         if (newSessionId) retryHeaders['mcp-session-id'] = newSessionId;
         const retryRes = await fetch(serverUrl, {
@@ -428,6 +447,16 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       throw new Error("LOVABLE_API_KEY is not configured");
+    }
+
+    // Populate MCP auth configs from incoming server data
+    mcpAuthConfigs.clear();
+    if (Array.isArray(mcp_servers)) {
+      for (const s of mcp_servers) {
+        if (s.url && s.authType && s.authType !== 'none') {
+          mcpAuthConfigs.set(s.url, { authType: s.authType, authToken: s.authToken, authHeader: s.authHeader });
+        }
+      }
     }
 
     // Build tools list based on enabled tools
