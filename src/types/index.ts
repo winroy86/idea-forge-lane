@@ -151,3 +151,39 @@ export interface AgentMemoryFile {
   createdAt: string;
   updatedAt: string;
 }
+
+// ---- Skills System ----
+
+export type SkillToolHint = 'code_execution' | 'web_search' | 'memory_write' | 'memory_read' | 'mcp_call';
+export type SkillPermission = 'webSearch' | 'codeExecution' | 'fileRead' | 'fileWrite';
+
+export interface SkillStep {
+  id: string;
+  instruction: string;
+  toolHint?: SkillToolHint;
+  outputKey?: string; // name to store result for later steps
+}
+
+export interface SkillInputField {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'text';
+  description: string;
+  required: boolean;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  icon: string; // emoji
+  category: string;
+  triggers: string[]; // keywords/phrases that activate this skill
+  requiredPermissions: SkillPermission[];
+  inputSchema: SkillInputField[];
+  steps: SkillStep[];
+  outputFormat: string; // markdown template
+  installedAt: string;
+  isBuiltIn?: boolean;
+}

@@ -1,6 +1,7 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
+import { buildSkillsPromptBlock } from '@/lib/skillStore';
 
 interface LLMResponse {
   content: string;
@@ -59,8 +60,16 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
   return prompt;
 }
 
+function buildSystemMessageWithSkills(agent: Agent, documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext, latestUserMessage?: string): string {
+  let prompt = buildSystemMessage(agent, documents, roomId, meetingContext);
+  const skillsBlock = buildSkillsPromptBlock(agent, latestUserMessage);
+  if (skillsBlock) prompt += skillsBlock;
+  return prompt;
+}
+
 function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext) {
-  const system = buildSystemMessage(agent, documents, roomId, meetingContext);
+  const latestUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content;
+  const system = buildSystemMessageWithSkills(agent, documents, roomId, meetingContext, latestUserMsg);
   // Only include public content - inner thoughts are private and not shared
   const history = messages.map(m => {
     if (m.role === 'user') {
