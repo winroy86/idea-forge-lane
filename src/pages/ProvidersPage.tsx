@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ExternalLink, Loader2, CheckCircle2, XCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { ProviderConfig, LLMProvider } from '@/types';
 import { getProviders, upsertProvider, deleteProvider, generateId } from '@/lib/store';
+import { waitForProviderHydration } from '@/lib/providerHydration';
 import { detectOllamaModels, formatModelSize, OllamaModel } from '@/lib/ollama';
 import { Button } from '@/components/ui/button';
+import { testIds } from '@/testIds';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -64,7 +66,11 @@ export default function ProvidersPage() {
   }, [newProvider, open]);
 
   const refresh = () => setProviders(getProviders());
-  useEffect(refresh, []);
+
+  useEffect(() => {
+    refresh();
+    waitForProviderHydration().then(refresh);
+  }, []);
 
   const handleCreate = () => {
     const p: ProviderConfig = {
@@ -84,7 +90,7 @@ export default function ProvidersPage() {
   };
 
   return (
-    <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-3xl mx-auto">
+    <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-3xl mx-auto" data-testid={testIds.providers.page}>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Providers</h1>
@@ -92,15 +98,15 @@ export default function ProvidersPage() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-1.5"><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
+            <Button size="sm" className="gap-1.5" data-testid={testIds.providers.addButton}><Plus className="h-3.5 w-3.5" /> Add Provider</Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent data-testid={testIds.providers.modal}>
             <DialogHeader><DialogTitle>Add Provider</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
               <div>
                 <Label>Provider</Label>
                 <Select value={newProvider} onValueChange={v => setNewProvider(v as LLMProvider)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid={testIds.providers.providerSelect}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
                   </SelectContent>
@@ -115,11 +121,11 @@ export default function ProvidersPage() {
                 <>
                   <div>
                     <Label>Label (optional)</Label>
-                    <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" />
+                    <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="My OpenAI Key" data-testid={testIds.providers.labelInput} />
                   </div>
                   <div>
                     <Label>API Key</Label>
-                    <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} />
+                    <Input type="password" value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={PROVIDERS.find(p => p.value === newProvider)?.hint} data-testid={testIds.providers.keyInput} />
                   </div>
                 </>
               )}
@@ -168,7 +174,7 @@ export default function ProvidersPage() {
               {newProvider === 'lovable' ? (
                 <Button onClick={() => setOpen(false)} className="w-full">Got it</Button>
               ) : (
-                <Button onClick={handleCreate} className="w-full">Save Provider</Button>
+                <Button onClick={handleCreate} className="w-full" data-testid={testIds.providers.saveButton}>Save Provider</Button>
               )}
             </div>
           </DialogContent>
@@ -184,14 +190,14 @@ export default function ProvidersPage() {
         </div>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-3" data-testid={testIds.providers.list}>
         {providers.length === 0 && (
           <div className="text-center py-10 text-sm text-muted-foreground">
             No additional providers configured. You can already use Lovable AI without any keys.
           </div>
         )}
         {providers.map(p => (
-          <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-soft">
+          <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-soft" data-testid={testIds.providers.row(p.id)}>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-foreground">{p.label}</span>
@@ -205,8 +211,8 @@ export default function ProvidersPage() {
               </div>
               {p.baseUrl && <div className="text-[10px] text-muted-foreground mt-0.5">{p.baseUrl}</div>}
             </div>
-            <Switch checked={p.isActive} onCheckedChange={v => { upsertProvider({ ...p, isActive: v }); refresh(); }} />
-            <button onClick={() => { deleteProvider(p.id); refresh(); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+            <Switch data-testid={testIds.providers.rowToggle(p.id)} checked={p.isActive} onCheckedChange={v => { upsertProvider({ ...p, isActive: v }); refresh(); }} />
+            <button data-testid={testIds.providers.rowDelete(p.id)} onClick={() => { deleteProvider(p.id); refresh(); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>

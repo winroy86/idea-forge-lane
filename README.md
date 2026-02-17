@@ -73,6 +73,27 @@ npm run smoke:prod
 
 This runs a production build and starts Vite preview.
 
+## Readiness check
+
+Run the readiness script to quickly verify backend/provider integration status:
+
+```sh
+./scripts/readiness-check.sh
+```
+
+The output is intentionally split into:
+
+- **Foundation present**: baseline capabilities detected.
+- **Production-hardening pending**: missing pieces that should be resolved before production.
+- **Warnings**: risk indicators that do not fail the check but can still cause insecure or fragile behavior.
+
+Current checks include:
+
+- Presence of `/api/providers` route in `server/index.js`.
+- Encryption helper usage and encrypted provider key field checks (`encryptText`, `decryptText`, `api_key_encrypted`) in `server/index.js`.
+- Frontend provider backend sync hook presence in `src/lib/storageAdapter.ts`.
+- Warning when `src/lib/llm.ts` appears to still depend on client-stored provider secrets in backend mode.
+
 **Edit a file directly in GitHub**
 
 - Navigate to the desired file(s).
@@ -108,3 +129,11 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Provider key management
+
+Server-side provider key encryption/rotation runbook is documented in:
+
+- `docs/provider-key-rotation.md`
+- rotation command: `node scripts/rotate-provider-keys.mjs`
+

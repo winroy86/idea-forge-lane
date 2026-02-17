@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
+import { waitForProviderHydration } from '@/lib/providerHydration';
 import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { getSkills } from '@/lib/skillStore';
@@ -98,18 +99,38 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [mcpAuthHeader, setMcpAuthHeader] = useState('');
 
   useEffect(() => {
-    if (form.config.provider === 'ollama') {
+    let cancelled = false;
+
+    const loadOllamaModels = async () => {
+      if (form.config.provider !== 'ollama') {
+        setOllamaModels([]);
+        return;
+      }
+
       setOllamaLoading(true);
+      await waitForProviderHydration();
+
       const providers = getProviders();
       const ollamaProvider = providers.find(p => p.provider === 'ollama' && p.isActive);
       const baseUrl = form.config.baseUrl || ollamaProvider?.baseUrl || 'http://localhost:11434';
-      detectOllamaModels(baseUrl).then(models => {
+      const models = await detectOllamaModels(baseUrl);
+
+      if (!cancelled) {
         setOllamaModels(models);
         setOllamaLoading(false);
-      });
-    } else {
-      setOllamaModels([]);
-    }
+      }
+    };
+
+    loadOllamaModels().catch(() => {
+      if (!cancelled) {
+        setOllamaModels([]);
+        setOllamaLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [form.config.provider, form.config.baseUrl]);
 
   const update = (patch: Partial<Agent>) => setForm(prev => ({ ...prev, ...patch }));

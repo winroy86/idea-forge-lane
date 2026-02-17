@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+  envPrefix: ['VITE_', 'AUTH_'],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
