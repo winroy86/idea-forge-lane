@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -668,7 +669,6 @@ serve(async (req) => {
           console.log(`🔍 Agent searching: "${query}"`);
  <<<<<<< codex/refactor-tool-orchestration-architecture
           const searchResult = await performWebSearch(query, providerApiKey);
-=======
           const searchModel = typeof model === "string" && model ? model : "google/gemini-3-flash-preview";
           const searchResult = await performWebSearch(query, LOVABLE_API_KEY, searchModel);
  >>>>>>> main
@@ -722,7 +722,14 @@ serve(async (req) => {
       data._toolCallsMade = toolCallsMade;
     }
 
-    return new Response(JSON.stringify(data), {
+    const normalized = {
+      content: data.choices?.[0]?.message?.content || "",
+      usage: data.usage,
+      toolCallsMade,
+      raw: data,
+    };
+
+    return new Response(JSON.stringify(normalized), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

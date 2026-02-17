@@ -107,3 +107,8 @@ export const saveAppSettings = (settings: AppSettings) => save(KEYS.settings, se
 
 // Utility
 export const generateId = () => crypto.randomUUID();
+
+
+// Credentials mode
+export const getLocalDevMode = (): boolean => load(KEYS.localDevMode, false);
+export const setLocalDevMode = (enabled: boolean) => save(KEYS.localDevMode, enabled);
