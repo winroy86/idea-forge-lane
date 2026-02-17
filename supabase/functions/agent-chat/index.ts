@@ -180,7 +180,7 @@ async function searchGoogle(query: string): Promise<{ snippets: string[]; source
   }
 }
 
-async function performWebSearch(query: string, apiKey: string): Promise<{ result: string; sources: string[] }> {
+async function performWebSearch(query: string, apiKey: string, synthesisModel: string): Promise<{ result: string; sources: string[] }> {
   // Try Google first, then Wikipedia
   let { snippets, sources } = await searchGoogle(query);
 
@@ -199,7 +199,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
+        model: synthesisModel,
         messages: [
           {
             role: "system",
@@ -232,7 +232,7 @@ async function performWebSearch(query: string, apiKey: string): Promise<{ result
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash-lite",
+      model: synthesisModel,
       messages: [
         {
           role: "system",
@@ -666,7 +666,12 @@ serve(async (req) => {
         if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
+ <<<<<<< codex/refactor-tool-orchestration-architecture
           const searchResult = await performWebSearch(query, providerApiKey);
+=======
+          const searchModel = typeof model === "string" && model ? model : "google/gemini-3-flash-preview";
+          const searchResult = await performWebSearch(query, LOVABLE_API_KEY, searchModel);
+ >>>>>>> main
           toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
           toolResult = searchResult.result;
         } else if (fnName === "code_execution") {

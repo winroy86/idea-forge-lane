@@ -13,6 +13,7 @@ import {
   getMeetingSessions, saveMeetingSession, getActiveMeeting
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
+import { getDefaultLlmSelection } from '@/lib/providerSelection';
 import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import ResearchProgressBar from '@/components/ResearchProgressBar';
@@ -293,6 +294,7 @@ export default function RoomView() {
     }
     const base64 = btoa(binary);
 
+    const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
     const res = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
       method: 'POST',
       headers: {
@@ -303,6 +305,7 @@ export default function RoomView() {
         fileBase64: base64,
         fileName: file.name,
         mimeType: file.type || 'application/pdf',
+        llm,
       }),
     });
 
@@ -934,7 +937,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {msg.metadata && (
                       <>
-                        <span>{msg.metadata.model}</span>
+                        <span>{msg.metadata.provider}/{msg.metadata.model}</span>
                         <span>{msg.metadata.tokensUsed} tokens</span>
                         <span>{msg.metadata.latencyMs}ms</span>
                       </>
