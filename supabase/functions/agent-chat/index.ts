@@ -507,7 +507,7 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    let response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${LOVABLE_API_KEY}`,
@@ -515,6 +515,22 @@ serve(async (req) => {
       },
       body: JSON.stringify(body),
     });
+
+    // If gateway returns 500 with tools, retry without tools as fallback
+    if (response.status === 500 && tools.length > 0) {
+      console.warn("AI gateway 500 with tools — retrying without tools");
+      const bodyNoTools = { ...body };
+      delete bodyNoTools.tools;
+      delete bodyNoTools.tool_choice;
+      response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(bodyNoTools),
+      });
+    }
 
     if (!response.ok) {
       if (response.status === 429) {
