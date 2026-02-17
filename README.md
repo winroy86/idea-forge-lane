@@ -108,3 +108,11 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Provider key management
+
+Server-side provider key encryption/rotation runbook is documented in:
+
+- `docs/provider-key-rotation.md`
+- rotation command: `node scripts/rotate-provider-keys.mjs`
+
