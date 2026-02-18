@@ -1,121 +1,165 @@
 
+# Full System Audit & Fix Plan
 
-## Skills System Implementation
+## Root Cause Analysis
 
-This plan adds a Claude-like skill system where skills are structured workflow manifests that agents can load and execute using their existing capabilities (code execution, memory, web search, MCP tools).
+After a thorough review of all code paths, I identified **5 critical bugs** that prevent the system from working correctly in either local or server mode.
 
-### Core Concept
-
-A **Skill** is a JSON manifest that defines:
-- What the skill does (name, description, trigger conditions)
-- What tools/permissions it requires
-- A step-by-step workflow the agent follows during its inner reasoning
-- Input/output schemas
-
-Agents don't need new capabilities -- skills are injected into the agent's system prompt when relevant, and the agent uses its existing tools (code execution, memory, web search, file read/write via memory) to follow the workflow. The inner thoughts phase is where the agent plans and executes skill steps.
-
-### What Changes
-
-**1. New types (`src/types/index.ts`)**
-
-Add `Skill` and `SkillStep` interfaces:
-
-```text
-SkillStep {
-  id, instruction, toolHint (optional: 'code_execution' | 'web_search' | 'memory_write' | 'mcp_call'),
-  outputKey (optional: name to store result for later steps)
-}
-
-Skill {
-  id, name, description, version, author,
-  icon (emoji), category,
-  triggers: string[] (keywords/phrases that activate this skill),
-  requiredPermissions: ('webSearch' | 'codeExecution' | 'fileRead' | 'fileWrite')[],
-  inputSchema: { name, type, description, required }[],
-  steps: SkillStep[],
-  outputFormat: string (markdown template),
-  installedAt: string
-}
-```
-
-**2. Skill store (`src/lib/skillStore.ts`)**
-
-localStorage-based CRUD for skills, plus:
-- `getSkills()`, `getSkill(id)`, `upsertSkill()`, `deleteSkill()`
-- `getAgentSkills(agent)` -- returns full Skill objects for an agent's `skills: string[]` array
-- `importSkillFromJSON(json)` -- parse and validate a skill manifest
-- A set of **built-in starter skills** bundled as defaults (e.g., "Deep Research", "Code Analyzer", "Fact Checker", "SWOT Analysis")
-
-**3. Skills Page UI (`src/pages/SkillsPage.tsx`)**
-
-Replace the "Coming Soon" placeholder with:
-- Grid of installed skills (icon, name, description, category, required permissions badge)
-- "Install Skill" button opening a dialog with options:
-  - Paste JSON manifest
-  - Load from URL
-- Skill detail view (click to expand: see steps, input schema, output format)
-- Delete button per skill
-- "Starter Skills" section with one-click install for built-in templates
-
-**4. Agent editor skill assignment (`src/pages/AgentsPage.tsx`)**
-
-In the agent editor's Advanced Settings section, add:
-- A multi-select checklist of installed skills
-- Each skill shows an icon + name + required permissions warning if the agent lacks them
-- Selecting a skill adds its ID to `agent.skills[]`
-
-**5. Skill injection into agent reasoning (`src/lib/llm.ts`)**
-
-In `buildSystemMessage()`:
-- Look up the agent's assigned skills via `getAgentSkills(agent)`
-- For each skill, check if any trigger keywords appear in the latest user message
-- If triggered (or if the agent has the skill and the context is relevant), append a structured "AVAILABLE SKILLS" block to the system prompt:
-
-```text
---- AVAILABLE SKILLS ---
-[Skill: Deep Research]
-Triggers: "research", "investigate", "deep dive"
-Steps:
-  1. Define research questions (use memory to store plan)
-  2. Search for information (use web_search)
-  3. Analyze and cross-reference findings (use code_execution if needed)
-  4. Write consolidated report to memory
-Output: ## Research Report ...
 ---
+
+## Bug 1 (Critical): `user_provider_credentials` Table Does Not Exist
+
+The entire provider-storage architecture depends on a database table that was **never migrated**. The `supabase/functions/provider-secrets/index.ts` and the lookup inside `agent-chat/index.ts` both query `user_provider_credentials`, but the database schema is completely empty (`Tables: { [_ in never]: never }`). 
+
+**Effect:** Every provider save/load/lookup silently fails. Users cannot store or retrieve provider keys server-side.
+
+**Fix:** Create the migration for `user_provider_credentials` with proper RLS policies.
+
+---
+
+## Bug 2 (Critical): `callViaEdgeFunction` Sends Anon Key Instead of User JWT
+
+In `src/lib/llm.ts` (line 303), `callViaEdgeFunction` sends `VITE_SUPABASE_PUBLISHABLE_KEY` (the anon key) as the `Authorization: Bearer` header:
+
+```typescript
+Authorization: `Bearer ${supabaseKey}`,  // ← This is the ANON key, not a user JWT
 ```
 
-The agent's inner thinking phase naturally picks up these instructions and follows them. No changes to the edge function are needed -- the agent already has code execution, web search, and memory tools.
+The `agent-chat` edge function then tries to verify this token via `admin.auth.getUser(token)` to look up the user's stored API keys. Because the anon key has no `sub` claim, this always returns 403 → `userData.user` is null → `resolvedApiKey` remains undefined.
 
-**6. Built-in Starter Skills**
+The auth logs confirm this: `403: invalid claim: missing sub claim` on every agent call.
 
-Four pre-packaged skills:
+**Effect:** User-stored API keys are NEVER retrieved from the database — even if the table existed. The global `OPENAI_API_KEY` fallback for `openai` provider works, but all other providers (anthropic, gemini, custom, azure) always fail.
 
-- **Deep Research**: Multi-step web search, cross-reference, synthesize findings
-- **Code Analyzer**: Read code from documents, analyze patterns, suggest improvements
-- **Fact Checker**: Verify claims using web search, rate confidence
-- **SWOT Analysis**: Structured strengths/weaknesses/opportunities/threats framework
+**Fix:** In `callViaEdgeFunction`, fetch the user's active Supabase session JWT and send it as the Bearer token. Fall back to the anon key only when no session exists (for the lovable provider which doesn't need key lookup).
 
-### Technical Details
+---
 
-**File changes:**
+## Bug 3 (Critical): `provider-secrets` Edge Function Is Not JWT-Verified
+
+`supabase/config.toml` only sets `verify_jwt = false` for `agent-chat`, but not for `provider-secrets`. This means `provider-secrets` enforces JWT verification at the gateway level even before the function code runs. Since `ProvidersPage.tsx` correctly sends the session access token, this should be fine — but it needs `verify_jwt = false` in config so the function's own auth logic can handle it consistently.
+
+Actually, looking more carefully — `ProvidersPage.tsx` does correctly fetch the session token via `getAuthToken()`. The provider-secrets function does also validate the JWT manually. So this is OK as-is.
+
+---
+
+## Bug 4 (Moderate): Provider Hydration Runs Before Login
+
+`App.tsx` calls `hydrateProvidersFromServer()` at mount time (line 25-28). At that moment, the user may not be logged in — `supabase.auth.getSession()` returns `null`. The hydration silently exits, sets `hydrationComplete = true`, and the `hydrationPromise` is cached. This means that even **after** login, `waitForProviderHydration()` immediately returns (it thinks hydration is done) without actually fetching the user's providers.
+
+**Fix:** Reset the hydration cache after successful login, or hydrate lazily per-call. The simplest fix is to not cache the promise globally and always re-check the session.
+
+---
+
+## Bug 5 (Moderate): Auth Architecture Conflict — Supabase Auth vs. Local Auth
+
+The system has two competing auth systems:
+- `src/lib/auth.ts` — a custom localStorage session using `admin / password` fallback
+- Supabase Auth — email/password handled by the Supabase client
+
+`ProtectedRoute.tsx` uses `getSession()` from `src/lib/auth.ts`, which checks for a session token in localStorage. But Supabase Auth manages its own session in localStorage. These two systems are completely disconnected.
+
+**Effect:** When the app is deployed (Lovable Cloud), Supabase Auth is available but the `ProtectedRoute` only checks the local custom session — so the app either lets everyone in (if `AUTH_ENABLED` is not set) or blocks everyone (if it is set, since no Supabase login was ever built).
+
+**Fix:** Unify auth — replace the custom login/session with Supabase Auth (email/password). This enables proper user sessions (JWTs) that can be used to authenticate edge function calls.
+
+---
+
+## Technical Implementation Plan
+
+### Step 1: Database Migration — Create `user_provider_credentials` Table
+
+```sql
+CREATE TABLE public.user_provider_credentials (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  provider TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  api_key TEXT,
+  base_url TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Row-level security: users can only access their own credentials
+ALTER TABLE public.user_provider_credentials ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own credentials"
+  ON public.user_provider_credentials
+  FOR ALL
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+-- Auto-update timestamp
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_user_provider_credentials_updated_at
+  BEFORE UPDATE ON public.user_provider_credentials
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```
+
+### Step 2: Replace Login Page with Supabase Auth
+
+Replace `src/pages/LoginPage.tsx` with Supabase email/password auth:
+- Sign up form (email + password)
+- Sign in form
+- Password reset link
+- Use `supabase.auth.signInWithPassword()` and `supabase.auth.signUp()`
+
+### Step 3: Update `ProtectedRoute` to Use Supabase Session
+
+Replace the local `getSession()` check with `supabase.auth.getSession()` — redirect to `/login` if no Supabase session exists.
+
+### Step 4: Fix `callViaEdgeFunction` to Send User JWT
+
+In `src/lib/llm.ts`, update `callViaEdgeFunction` to:
+1. Call `supabase.auth.getSession()` to get the user's access token
+2. Send `Authorization: Bearer ${session.access_token}` when a session exists
+3. Fall back to the anon key for requests that don't need user lookup (lovable provider)
+
+### Step 5: Fix Provider Hydration Cache
+
+In `src/lib/providerHydration.ts`:
+- Remove the module-level `hydrationPromise` caching
+- Always re-run hydration when a user session is present
+- Export a `resetHydration()` function to be called after login
+
+Call `resetHydration()` + `hydrateProvidersFromServer()` from the login success handler.
+
+### Step 6: Update `supabase/config.toml` for Edge Functions
+
+Add `verify_jwt = false` to all functions that do their own JWT validation (`provider-secrets`, `generate-persona`, `extract-document`), so the Supabase gateway doesn't block requests with non-standard tokens.
+
+### Step 7: Fix `agent-chat` Edge Function Auth Verification
+
+The function already handles the case where `userData.user` is null (it just skips the DB lookup). But with the JWT fix in Step 4, user lookup will now work correctly. The existing `OPENAI_API_KEY` environment fallback for openai provider will still work for agents using the global key.
+
+---
+
+## Local Mode Behavior (No Supabase Auth Session)
+
+When running locally (e.g. Ollama, or local dev mode):
+- `getLocalDevMode()` flag is checked — API keys stored in localStorage
+- `callViaEdgeFunction` falls back to anon key (no user lookup needed)
+- `callOpenAICompatible` / `callAnthropic` / `callGemini` call APIs directly from the browser using localStorage keys
+
+This path already works correctly and requires no changes.
+
+---
+
+## Files to Change
 
 | File | Change |
-|------|--------|
-| `src/types/index.ts` | Add `Skill`, `SkillStep` interfaces |
-| `src/lib/skillStore.ts` | New file -- skill CRUD + built-in skills + import |
-| `src/pages/SkillsPage.tsx` | Full rewrite -- skill grid, install dialog, detail view |
-| `src/pages/AgentsPage.tsx` | Add skill assignment multi-select in agent editor |
-| `src/lib/llm.ts` | Inject active skills into `buildSystemMessage()` |
-
-**No edge function changes needed** -- skills are prompt-level workflows that use existing tool infrastructure.
-
-**No database changes needed** -- skills stored in localStorage alongside agents and rooms.
-
-### Why This Works Simply
-
-- Skills are "structured prompt injection" -- the agent's LLM already knows how to follow step-by-step instructions
-- The inner thoughts phase is where skill execution happens naturally
-- Research loops amplify skill effectiveness (more steps = more thorough skill execution)
-- Memory system stores intermediate skill results between steps
-- Existing permissions gate what tools a skill can actually use
-
+|---|---|
+| `supabase/migrations/YYYYMMDD_create_provider_credentials.sql` | New — creates `user_provider_credentials` table with RLS |
+| `supabase/config.toml` | Add `verify_jwt = false` for `provider-secrets`, `generate-persona`, `extract-document` |
+| `src/pages/LoginPage.tsx` | Replace local auth with Supabase email/password sign-in/up |
+| `src/components/ProtectedRoute.tsx` | Check Supabase session instead of local session |
+| `src/lib/llm.ts` | `callViaEdgeFunction` — send user JWT, not anon key |
+| `src/lib/providerHydration.ts` | Remove stale promise cache; add `resetHydration()` |
+| `src/lib/auth.ts` | Remove or stub out (replaced by Supabase auth) |
+| `src/App.tsx` | Hydrate providers after auth state confirmed |
