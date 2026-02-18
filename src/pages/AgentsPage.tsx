@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
-import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
+import { getAgents, upsertAgent, deleteAgent, generateId, getProviders, getAppSettings } from '@/lib/store';
 import { waitForProviderHydration } from '@/lib/providerHydration';
 import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
@@ -586,7 +586,11 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
 
     setIsGenerating(true);
     try {
-      const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
+      // Use global app settings for persona generation provider
+      const globalSettings = getAppSettings().summarizer;
+      const llm = globalSettings.provider && globalSettings.model && globalSettings.provider !== 'lovable'
+        ? { provider: globalSettings.provider, model: globalSettings.model, baseUrl: globalSettings.baseUrl }
+        : getDefaultLlmSelection('google/gemini-2.5-flash');
       const { data, error } = await supabase.functions.invoke('generate-persona', {
         body: mode === 'famous'
           ? { personName: personName.trim(), description: description.trim(), llm }

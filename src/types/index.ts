@@ -71,6 +71,8 @@ export interface Room {
   documents: RoomDocument[];
   meetings: MeetingSession[];
   activeMeetingId?: string;
+  /** Per-room summarizer override. If not set, falls back to global AppSettings.summarizer. */
+  summarizer?: SummarizerSettings;
   createdAt: string;
   updatedAt: string;
 }

@@ -7,10 +7,10 @@ import {
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
   Upload, Eye, EyeOff, Paperclip, Trash2, Database, Timer, Clock, Square
 } from 'lucide-react';
-import { Room, Agent, Message, OrchestrationType, SummarizerAction, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
+import { Room, Agent, Message, OrchestrationType, SummarizerAction, SummarizerSettings, LLMProvider, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId,
-  getMeetingSessions, saveMeetingSession, getActiveMeeting
+  getMeetingSessions, saveMeetingSession, getActiveMeeting, getAppSettings
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getDefaultLlmSelection } from '@/lib/providerSelection';
@@ -37,6 +37,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -563,7 +568,14 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
     if (!room || loadingAgentId) return;
     setLoadingAgentId('summarizer');
     try {
-      const result = await callSummarizer(action, messages, allAgents);
+      // Use room-level summarizer override, or fall back to global app settings
+      const globalSettings = getAppSettings().summarizer;
+      const summarizerSettings: SummarizerSettings | undefined =
+        room.summarizer?.provider && room.summarizer?.model
+          ? room.summarizer
+          : (globalSettings.provider && globalSettings.model ? globalSettings : undefined);
+
+      const result = await callSummarizer(action, messages, allAgents, summarizerSettings);
       const msg: Message = {
         id: generateId(),
         roomId: room.id,
@@ -584,6 +596,18 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
     } finally {
       setLoadingAgentId(null);
     }
+  };
+
+  const updateRoomSummarizer = (patch: Partial<SummarizerSettings>) => {
+    if (!room) return;
+    const current = room.summarizer || { provider: 'lovable' as LLMProvider, model: 'google/gemini-3-flash-preview' };
+    const updated: Room = {
+      ...room,
+      summarizer: { ...current, ...patch },
+      updatedAt: new Date().toISOString(),
+    };
+    upsertRoom(updated);
+    setRoom(updated);
   };
 
   const updateOrchestration = (type: OrchestrationType) => {
@@ -1041,7 +1065,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
         )}
 
         {/* Summarizer actions */}
-        <div className="border-t border-border bg-card px-4 py-2 flex gap-2 overflow-x-auto">
+        <div className="border-t border-border bg-card px-4 py-2 flex items-center gap-2 overflow-x-auto">
           <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('summarize')} disabled={!!loadingAgentId || messages.length === 0}>
             <FileText className="h-3 w-3" /> {loadingAgentId === 'summarizer' ? 'Working…' : 'Summarize'}
           </Button>
@@ -1054,6 +1078,80 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
           <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('updateMemory')} disabled={!!loadingAgentId || messages.length === 0}>
             <Brain className="h-3 w-3" /> Update Memory
           </Button>
+          {/* Per-room summarizer provider/model settings */}
+          <div className="ml-auto shrink-0">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-[10px] text-muted-foreground hover:text-foreground">
+                  <Settings2 className="h-3 w-3" />
+                  {room.summarizer?.provider
+                    ? <span className="hidden sm:inline">{room.summarizer.provider}</span>
+                    : <span className="hidden sm:inline text-muted-foreground/60">global</span>
+                  }
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-3" align="end">
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs font-semibold text-foreground mb-0.5">Summarizer provider</p>
+                    <p className="text-[10px] text-muted-foreground mb-2">Override for this room. Leave on "Global default" to use Settings → Summarizer.</p>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground">Provider</Label>
+                    <Select
+                      value={room.summarizer?.provider || '__global__'}
+                      onValueChange={(v) => {
+                        if (v === '__global__') {
+                          // Clear room-level override
+                          const updated: Room = { ...room, summarizer: undefined, updatedAt: new Date().toISOString() };
+                          upsertRoom(updated);
+                          setRoom(updated);
+                        } else {
+                          updateRoomSummarizer({ provider: v as LLMProvider });
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__global__">— Global default (Settings page) —</SelectItem>
+                        <SelectItem value="lovable">⚡ Lovable AI</SelectItem>
+                        <SelectItem value="openai">🟢 OpenAI</SelectItem>
+                        <SelectItem value="anthropic">🟠 Anthropic</SelectItem>
+                        <SelectItem value="gemini">🔵 Gemini</SelectItem>
+                        <SelectItem value="azure">Azure OpenAI</SelectItem>
+                        <SelectItem value="ollama">🟣 Ollama</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {room.summarizer?.provider && (
+                    <>
+                      <div>
+                        <Label className="text-[10px] text-muted-foreground">Model</Label>
+                        <input
+                          className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                          value={room.summarizer?.model || ''}
+                          onChange={e => updateRoomSummarizer({ model: e.target.value })}
+                          placeholder="e.g. gpt-4o-mini"
+                        />
+                      </div>
+                      {(room.summarizer.provider === 'ollama' || room.summarizer.provider === 'custom' || room.summarizer.provider === 'azure') && (
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">Base URL</Label>
+                          <input
+                            className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                            value={room.summarizer?.baseUrl || ''}
+                            onChange={e => updateRoomSummarizer({ baseUrl: e.target.value || undefined })}
+                            placeholder="e.g. http://localhost:11434/v1"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
 
         {/* Input */}
