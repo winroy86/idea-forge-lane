@@ -12,19 +12,28 @@ serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     if (!supabaseUrl || !serviceRole) throw new Error("Supabase env not configured");
 
     const authHeader = req.headers.get("Authorization") || "";
-    const token = authHeader.replace("Bearer ", "").trim();
-    if (!token) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-    const admin = createClient(supabaseUrl, serviceRole);
-    const { data: userData, error: userErr } = await admin.auth.getUser(token);
-    if (userErr || !userData.user) {
+    if (!authHeader.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
-    const userId = userData.user.id;
+
+    // Use getClaims() — the modern JWT-verification approach
+    const anonClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const token = authHeader.replace("Bearer ", "").trim();
+    const { data: claimsData, error: claimsError } = await anonClient.auth.getClaims(token);
+    if (claimsError || !claimsData?.claims?.sub) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    const userId = claimsData.claims.sub as string;
+
+    // Service-role client for database ops (bypasses RLS)
+    const admin = createClient(supabaseUrl, serviceRole);
 
     if (req.method === "GET") {
       const { data, error } = await admin
@@ -32,7 +41,7 @@ serve(async (req) => {
         .select("id, provider, label, base_url, is_active, created_at, updated_at")
         .eq("user_id", userId)
         .order("updated_at", { ascending: false });
-      if (error) throw error;
+      if (error) throw new Error(error.message);
       return new Response(JSON.stringify({ providers: data ?? [] }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
@@ -69,19 +78,21 @@ serve(async (req) => {
         .upsert(payload, { onConflict: "id" })
         .select("id, provider, label, base_url, is_active, created_at, updated_at")
         .single();
-      if (error) throw error;
+      if (error) throw new Error(error.message);
       return new Response(JSON.stringify({ provider: data }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     if (req.method === "DELETE") {
       const { id } = await req.json();
       const { error } = await admin.from("user_provider_credentials").delete().eq("id", id).eq("user_id", userId);
-      if (error) throw error;
+      if (error) throw new Error(error.message);
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("provider-secrets error:", message);
+    return new Response(JSON.stringify({ error: message || "Unknown error" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
