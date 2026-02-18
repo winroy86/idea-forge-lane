@@ -1,4 +1,4 @@
-import { Shield, HardDrive } from 'lucide-react';
+import { Shield, HardDrive, MessageSquare } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { apiFetch } from '@/lib/apiFetch';
+import { getChatBubbleMode, setChatBubbleMode } from '@/lib/store';
 
 type AuthSettingsResponse = {
   enabled: boolean;
@@ -32,7 +33,13 @@ export default function SettingsPage() {
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [saving, setSaving] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
+  const [bubbleMode, setBubbleModeState] = useState(() => getChatBubbleMode());
   const { toast } = useToast();
+
+  const handleBubbleModeToggle = (enabled: boolean) => {
+    setChatBubbleMode(enabled);
+    setBubbleModeState(enabled);
+  };
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem(AUTH_SESSION_KEY);
@@ -191,6 +198,25 @@ export default function SettingsPage() {
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               Clear All Data
             </Button>
+          </div>
+        </div>
+
+        {/* Appearance */}
+        <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
+          <div className="flex items-center gap-3 mb-4">
+            <MessageSquare className="h-5 w-5 text-accent" />
+            <h2 className="text-sm font-semibold text-foreground">Appearance</h2>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">Chat Bubble View</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Display room conversations as colored chat bubbles with an agent avatar strip at the top.
+                </p>
+              </div>
+              <Switch checked={bubbleMode} onCheckedChange={handleBubbleModeToggle} />
+            </div>
           </div>
         </div>
 
