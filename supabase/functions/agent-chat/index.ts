@@ -493,15 +493,53 @@ serve(async (req) => {
 
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    // For lovable provider: key selection depends on model — resolved later after model is known
-    // For now store both and select after resolvedModel is determined
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
     const openAiKey = OPENAI_API_KEY;
     const lovableKey = LOVABLE_API_KEY;
+
+    // For non-lovable providers without an inline api_key, look up the user's stored key
+    let resolvedApiKey = api_key;
+    if (!resolvedApiKey && provider !== 'lovable' && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+      const authHeader = req.headers.get("Authorization") || "";
+      const token = authHeader.replace("Bearer ", "").trim();
+      if (token) {
+        try {
+          const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+          const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+          const { data: userData } = await admin.auth.getUser(token);
+          if (userData?.user?.id) {
+            const { data: creds } = await admin
+              .from("user_provider_credentials")
+              .select("api_key, base_url")
+              .eq("user_id", userData.user.id)
+              .eq("provider", provider)
+              .eq("is_active", true)
+              .order("updated_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (creds?.api_key) resolvedApiKey = creds.api_key;
+            // Also use stored base_url if not passed explicitly
+            if (!base_url && creds?.base_url) {
+              // Will be used below via resolvedBaseUrl
+              (req as any)._resolvedBaseUrl = creds.base_url;
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to look up user provider credentials:", e);
+        }
+      }
+    }
+
+    // Fall back to environment secrets for common providers if no user-stored key found
+    if (!resolvedApiKey && provider === 'openai' && OPENAI_API_KEY) resolvedApiKey = OPENAI_API_KEY;
+
     const providerApiKey = provider === 'lovable'
       ? (openAiKey || lovableKey)  // will be corrected below after model resolution
-      : api_key;
+      : resolvedApiKey;
     if (!providerApiKey && provider !== 'lovable') {
-      throw new Error(`Missing API key for provider: ${provider}`);
+      throw new Error(`Missing API key for provider "${provider}". Please add it in the Providers page.`);
     }
 
     // Populate MCP auth configs from incoming server data
@@ -562,9 +600,9 @@ serve(async (req) => {
     const resolvedIsGemini = resolvedModel.startsWith('google/') || resolvedModel.startsWith('gemini-');
     const finalApiKey = provider === 'lovable'
       ? (resolvedIsGemini ? lovableKey : (openAiKey || lovableKey))
-      : api_key;
+      : (resolvedApiKey || (provider === 'openai' ? openAiKey : undefined));
     if (!finalApiKey) {
-      throw new Error(provider === 'lovable' ? 'No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)' : `Missing API key for provider: ${provider}`);
+      throw new Error(provider === 'lovable' ? 'No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)' : `Missing API key for provider "${provider}". Please add it in the Providers page.`);
     }
 
     const body: Record<string, unknown> = {
