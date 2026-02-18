@@ -62,8 +62,8 @@ export default function ProvidersPage() {
       try {
         const backendProviders = await fetchBackendProviders();
         if (backendProviders.length > 0) {
-          setProviders(backendProviders);
           backendProviders.forEach((p: ProviderConfig) => upsertProvider(p));
+          setProviders(getProviders());
           return;
         }
       } catch (error) {
@@ -83,8 +83,9 @@ export default function ProvidersPage() {
     const mapped = (data.providers || []).map((r: any) => ({
       id: r.id, provider: r.provider, label: r.label, baseUrl: r.base_url || undefined, isActive: r.is_active, secretStored: true,
     }));
-    setProviders(mapped);
+    // Merge remote providers into local store, then show all
     mapped.forEach((p: ProviderConfig) => upsertProvider(p));
+    setProviders(getProviders());
   };
 const detectOllama = async (url?: string) => {
     setOllamaDetecting(true);

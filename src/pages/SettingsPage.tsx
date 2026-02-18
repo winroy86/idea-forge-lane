@@ -6,9 +6,6 @@ import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { apiFetch } from '@/lib/apiFetch';
-import { getAppSettings, saveAppSettings } from '@/lib/store';
-import { LLMProvider } from '@/types';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 type AuthSettingsResponse = {
   enabled: boolean;
@@ -35,7 +32,6 @@ export default function SettingsPage() {
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [saving, setSaving] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
-  const [summarizerSettings, setSummarizerSettings] = useState(() => getAppSettings().summarizer);
   const { toast } = useToast();
 
   const getAuthHeaders = () => {
@@ -66,12 +62,6 @@ export default function SettingsPage() {
   useEffect(() => {
     void fetchAuthConfig();
   }, []);
-
-  const updateSummarizerSetting = (patch: Partial<typeof summarizerSettings>) => {
-    const next = { ...summarizerSettings, ...patch };
-    setSummarizerSettings(next);
-    saveAppSettings({ ...getAppSettings(), summarizer: next });
-  };
 
   const handleClearData = () => {
     if (confirm('This will delete ALL rooms, agents, messages, and provider settings. Continue?')) {
@@ -175,7 +165,7 @@ export default function SettingsPage() {
               </p>
             )}
             {authEnabled && hasPassword && !sessionActive && (
-              <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700 space-y-2">
+              <div className="rounded border border-border bg-muted p-2 text-xs text-muted-foreground space-y-2">
                 <p>This session is not authenticated. Authenticate before updating or disabling auth settings.</p>
                 <Button size="sm" variant="secondary" onClick={handleAuthenticate} disabled={authenticating || saving || loadingAuth}>
                   {authenticating ? 'Authenticating...' : 'Authenticate Session'}
@@ -185,36 +175,6 @@ export default function SettingsPage() {
             <Button onClick={handleSaveAuth} disabled={loadingAuth || saving || authenticating} size="sm">
               {saving ? 'Saving...' : 'Save Authentication Settings'}
             </Button>
-          </div>
-        </div>
-
-        {/* Summarizer */}
-        <div className="rounded-lg border border-border bg-card p-4 shadow-soft">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Summarizer</h2>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Provider</Label>
-              <Select value={summarizerSettings.provider} onValueChange={(value) => updateSummarizerSetting({ provider: value as LLMProvider })}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="lovable">Lovable AI</SelectItem>
-                  <SelectItem value="openai">OpenAI</SelectItem>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
-                  <SelectItem value="gemini">Gemini</SelectItem>
-                  <SelectItem value="azure">Azure OpenAI</SelectItem>
-                  <SelectItem value="ollama">Ollama</SelectItem>
-                  <SelectItem value="custom">Custom OpenAI-compatible</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Model</Label>
-              <Input className="mt-1" value={summarizerSettings.model} onChange={e => updateSummarizerSetting({ model: e.target.value })} placeholder="e.g. gpt-4o-mini" />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Base URL (optional)</Label>
-              <Input className="mt-1" value={summarizerSettings.baseUrl || ''} onChange={e => updateSummarizerSetting({ baseUrl: e.target.value || undefined })} placeholder="Needed for custom/azure/ollama as applicable" />
-            </div>
           </div>
         </div>
 
