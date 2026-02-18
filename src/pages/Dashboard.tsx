@@ -17,10 +17,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 
 function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
-  // ... keep existing code (CreateRoomDialog component)
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [goal, setGoal] = useState('');
+  const navigate = useNavigate();
 
   const handleCreate = () => {
     if (!title.trim()) return;
@@ -44,6 +44,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
     setGoal('');
     setOpen(false);
     onCreated();
+    navigate(`/room/${room.id}`);
   };
 
   return (
