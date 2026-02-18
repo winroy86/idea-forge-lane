@@ -1,4 +1,4 @@
-import { hasSupabaseConfig } from '@/integrations/supabase/client';
+import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
 import { LLMProvider, ProviderConfig } from '@/types';
 import { saveProviders } from '@/lib/store';
 
@@ -22,14 +22,17 @@ function normalizeProvider(input: Partial<ProviderConfig> & { base_url?: string;
 
 async function fetchProvidersFromServer(): Promise<ProviderConfig[]> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  if (!supabaseUrl || !supabaseKey) return [];
+  if (!supabaseUrl || !supabase) return [];
+
+  // Get the actual user session token, not the anon key
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return [];
 
   const endpoint = providersEndpoint || `${supabaseUrl}/functions/v1/provider-secrets`;
   const res = await fetch(endpoint, {
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${supabaseKey}`,
+      Authorization: `Bearer ${session.access_token}`,
     },
   });
 
