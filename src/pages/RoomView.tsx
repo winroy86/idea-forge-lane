@@ -936,13 +936,28 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   {msg.innerThoughts && agent && (
                     <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
-                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
+                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
                     <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {msg.metadata && (
                       <>
-                        <span>{msg.metadata.provider}/{msg.metadata.model}</span>
-                        <span>{msg.metadata.tokensUsed} tokens</span>
-                        <span>{msg.metadata.latencyMs}ms</span>
+                        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
+                          msg.metadata.provider === 'lovable' ? 'bg-accent/15 text-accent' :
+                          msg.metadata.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                          msg.metadata.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
+                          msg.metadata.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                          msg.metadata.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
+                          'bg-muted text-muted-foreground'
+                        }`}>
+                          {msg.metadata.provider === 'lovable' ? '⚡' :
+                           msg.metadata.provider === 'openai' ? '🟢' :
+                           msg.metadata.provider === 'anthropic' ? '🟠' :
+                           msg.metadata.provider === 'gemini' ? '🔵' :
+                           msg.metadata.provider === 'ollama' ? '🟣' : '⚙️'}
+                          {' '}{msg.metadata.provider}
+                        </span>
+                        <span className="text-muted-foreground/70 truncate max-w-[120px]" title={msg.metadata.model}>{msg.metadata.model}</span>
+                        {msg.metadata.tokensUsed != null && <span>{msg.metadata.tokensUsed} tok</span>}
+                        {msg.metadata.latencyMs != null && <span>{msg.metadata.latencyMs}ms</span>}
                       </>
                     )}
                   </div>
