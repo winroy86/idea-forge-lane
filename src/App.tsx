@@ -15,16 +15,30 @@ import ProvidersPage from './pages/ProvidersPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import NotFound from './pages/NotFound';
-import { hasSupabaseConfig } from '@/integrations/supabase/client';
+import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
 import { hydrateProvidersFromServer } from '@/lib/providerHydration';
 
 const queryClient = new QueryClient();
 
 const App = () => {
   useEffect(() => {
-    if (hasSupabaseConfig) {
-      hydrateProvidersFromServer();
-    }
+    if (!hasSupabaseConfig || !supabase) return;
+
+    // Only hydrate providers when we have an authenticated session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        hydrateProvidersFromServer();
+      }
+    });
+
+    // Re-hydrate when auth state changes (e.g. after login)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        hydrateProvidersFromServer();
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   return (

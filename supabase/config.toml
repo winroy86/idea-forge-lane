@@ -2,3 +2,15 @@ project_id = "dobvdjxhigvlhfyantaq"
 
 [functions.agent-chat]
 verify_jwt = false
+
+[functions.provider-secrets]
+verify_jwt = false
+
+[functions.generate-persona]
+verify_jwt = false
+
+[functions.extract-document]
+verify_jwt = false
+
+[functions.mcp-test-server]
+verify_jwt = false

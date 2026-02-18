@@ -4,8 +4,8 @@ import { saveProviders } from '@/lib/store';
 
 const providersEndpoint = import.meta.env.VITE_PROVIDERS_ENDPOINT;
 
-let hydrationPromise: Promise<void> | null = null;
-let hydrationComplete = !hasSupabaseConfig;
+// No longer cache the promise — always re-check session on each call
+let hydrationComplete = false;
 
 function normalizeProvider(input: Partial<ProviderConfig> & { base_url?: string; is_active?: boolean }, index: number): ProviderConfig | null {
   if (!input.provider) return null;
@@ -53,28 +53,27 @@ export function isProviderHydrationComplete() {
   return hydrationComplete;
 }
 
-export async function hydrateProvidersFromServer() {
-  if (hydrationPromise) return hydrationPromise;
+/** Reset hydration state — call this after login so providers are re-fetched */
+export function resetHydration() {
+  hydrationComplete = false;
+}
 
+export async function hydrateProvidersFromServer() {
   if (!hasSupabaseConfig) {
     hydrationComplete = true;
     return;
   }
 
-  hydrationPromise = (async () => {
-    try {
-      const providers = await fetchProvidersFromServer();
-      if (providers.length > 0) {
-        saveProviders(providers);
-      }
-    } catch (error) {
-      console.warn('Provider hydration failed:', error);
-    } finally {
-      hydrationComplete = true;
+  try {
+    const providers = await fetchProvidersFromServer();
+    if (providers.length > 0) {
+      saveProviders(providers);
     }
-  })();
-
-  return hydrationPromise;
+  } catch (error) {
+    console.warn('Provider hydration failed:', error);
+  } finally {
+    hydrationComplete = true;
+  }
 }
 
 export async function waitForProviderHydration() {
