@@ -29,10 +29,7 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
- <<<<<<< codex/update-provider-selection-compatibility-logic
 import { DEFAULT_MODELS, getDefaultLlmSelection } from '@/lib/providerSelection';
-import { getDefaultLlmSelection } from '@/lib/providerSelection';
-        >>>>>>> main
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
