@@ -113,3 +113,11 @@ export const generateId = () => crypto.randomUUID();
 // Credentials mode
 export const getLocalDevMode = (): boolean => load(KEYS.localDevMode, false);
 export const setLocalDevMode = (enabled: boolean) => save(KEYS.localDevMode, enabled);
+
+// Chat Bubble Mode (appearance preference)
+export const getChatBubbleMode = (): boolean => {
+  try { return localStorage.getItem('br_chatBubbleMode') === 'true'; } catch { return false; }
+};
+export const setChatBubbleMode = (enabled: boolean) => {
+  try { localStorage.setItem('br_chatBubbleMode', enabled ? 'true' : 'false'); } catch {}
+};

@@ -5,12 +5,13 @@ import {
   ArrowLeft, Send, Plus, Play, Pause, SkipForward,
   ListOrdered, RotateCcw, Sparkles, FileText, CheckSquare,
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
-  Upload, Eye, EyeOff, Paperclip, Trash2, Database, Timer, Clock, Square
+  Upload, Eye, EyeOff, Paperclip, Trash2, Database, Timer, Clock, Square, Menu
 } from 'lucide-react';
 import { Room, Agent, Message, OrchestrationType, SummarizerAction, SummarizerSettings, LLMProvider, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId,
-  getMeetingSessions, saveMeetingSession, getActiveMeeting, getProviders
+  getMeetingSessions, saveMeetingSession, getActiveMeeting, getProviders,
+  getChatBubbleMode,
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getDefaultLlmSelection } from '@/lib/providerSelection';
@@ -44,6 +45,13 @@ import {
 } from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -170,6 +178,8 @@ export default function RoomView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<Message[]>([]);
   const { toast } = useToast();
+  const [bubbleMode] = useState(() => getChatBubbleMode());
+  const [bubblePanelOpen, setBubblePanelOpen] = useState(false);
 
   // Meeting state
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
@@ -839,12 +849,22 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                 <SelectItem value="auto">Auto</SelectItem>
               </SelectContent>
             </Select>
-            <button
-              onClick={() => setShowAgentPanel(!showAgentPanel)}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted md:hidden"
-            >
-              <Settings2 className="h-4 w-4" />
-            </button>
+            {/* Mobile toggle — or bubble mode panel trigger */}
+            {bubbleMode ? (
+              <button
+                onClick={() => setBubblePanelOpen(true)}
+                className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowAgentPanel(!showAgentPanel)}
+                className="rounded-md p-1.5 text-muted-foreground hover:bg-muted md:hidden"
+              >
+                <Settings2 className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -894,8 +914,36 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
           </div>
         )}
 
+        {/* Bubble mode: Agent avatar strip */}
+        {bubbleMode && roomAgents.length > 0 && (
+          <div className="border-b border-border bg-card px-3 py-2.5 overflow-x-auto">
+            <div className="flex items-start gap-3 min-w-max">
+              {roomAgents.map((agent, idx) => (
+                <button
+                  key={agent.id}
+                  onClick={() => !loadingAgentId && triggerAgent(agent.id)}
+                  disabled={!!loadingAgentId}
+                  className="flex flex-col items-center gap-1 group"
+                  title={`${agent.name} — ${agent.role}`}
+                >
+                  <div
+                    className={`relative h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold text-primary-foreground transition-transform group-hover:scale-105 ${
+                      loadingAgentId === agent.id ? 'ring-2 ring-offset-1 ring-accent animate-pulse' : ''
+                    }`}
+                    style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}
+                  >
+                    {agent.name[0].toUpperCase()}
+                  </div>
+                  <span className="text-[9px] font-medium text-foreground max-w-[52px] truncate leading-none">{agent.name}</span>
+                  <span className="text-[8px] text-muted-foreground max-w-[52px] truncate leading-none">{agent.role}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className={`flex-1 overflow-y-auto p-4 space-y-3 ${bubbleMode ? 'bg-amber-50/20 dark:bg-neutral-900/40' : ''}`}>
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center py-16">
               <Sparkles className="h-8 w-8 text-accent/50 mb-3" />
@@ -912,10 +960,131 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
             const isSummarizer = msg.role === 'summarizer';
             const isUser = msg.role === 'user';
             const isSystem = msg.role === 'system';
-            // Show processing indicator after the last user message if an agent is loading
-            const isLastUserMsg = isUser && msgIdx === messages.length - 1 || (isUser && messages.slice(msgIdx + 1).every(m => m.role === 'user'));
-            const showProcessing = isUser && loadingAgentId && msgIdx === [...messages].reverse().findIndex(m => m.role === 'user');
+            const agentColorIdx = agent ? (agent.colorIndex % 6) + 1 : 1;
 
+            const metaFooter = (
+              <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
+                <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                {msg.metadata && (
+                  <>
+                    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
+                      msg.metadata.provider === 'lovable' ? 'bg-accent/15 text-accent' :
+                      msg.metadata.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                      msg.metadata.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
+                      msg.metadata.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                      msg.metadata.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
+                      'bg-muted text-muted-foreground'
+                    }`}>
+                      {msg.metadata.provider === 'lovable' ? '⚡' :
+                       msg.metadata.provider === 'openai' ? '🟢' :
+                       msg.metadata.provider === 'anthropic' ? '🟠' :
+                       msg.metadata.provider === 'gemini' ? '🔵' :
+                       msg.metadata.provider === 'ollama' ? '🟣' : '⚙️'}
+                      {' '}{msg.metadata.provider}
+                    </span>
+                    <span className="text-muted-foreground/70 truncate max-w-[120px]" title={msg.metadata.model}>{msg.metadata.model}</span>
+                    {msg.metadata.tokensUsed != null && <span>{msg.metadata.tokensUsed} tok</span>}
+                    {msg.metadata.latencyMs != null && <span>{msg.metadata.latencyMs}ms</span>}
+                  </>
+                )}
+              </div>
+            );
+
+            const proseClasses = `prose prose-sm max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground ${isUser ? 'prose-invert' : 'dark:prose-invert'}`;
+
+            // ---- BUBBLE MODE ----
+            if (bubbleMode) {
+              if (isSystem || isSummarizer) {
+                // Centered pill for system/summarizer (unchanged)
+                return (
+                  <div key={msg.id} className="animate-fade-in">
+                    <div className={`max-w-[80%] rounded-2xl px-3 py-2.5 text-sm mx-auto text-center ${
+                      isSystem
+                        ? 'bg-muted/60 border border-dashed border-muted-foreground/30'
+                        : 'bg-accent/10 border border-accent/20'
+                    }`}>
+                      {isSummarizer && (
+                        <div className="flex items-center justify-center gap-1.5 mb-1.5 text-accent">
+                          <Brain className="h-3.5 w-3.5" />
+                          <span className="font-medium text-xs">Summarizer</span>
+                        </div>
+                      )}
+                      <div className={proseClasses}><ReactMarkdown>{msg.content}</ReactMarkdown></div>
+                      {metaFooter}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (isUser) {
+                return (
+                  <div key={msg.id} className="animate-fade-in">
+                    <div className="flex justify-end">
+                      <div className="max-w-[80%] rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm bg-secondary text-secondary-foreground">
+                        <div className={proseClasses}><ReactMarkdown>{msg.content}</ReactMarkdown></div>
+                        <div className="mt-1 text-[10px] text-secondary-foreground/60 text-right">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+                    {loadingAgentId && msgIdx === messages.map((m, i) => m.role === 'user' ? i : -1).filter(i => i >= 0).pop() && (
+                      <div className="flex justify-end mt-1.5 animate-fade-in">
+                        <div className="flex items-center gap-2 rounded-lg bg-muted/60 border border-border px-3 py-1.5 text-xs text-muted-foreground">
+                          <div className="flex gap-0.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '0ms' }} />
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '150ms' }} />
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '300ms' }} />
+                          </div>
+                          <span>{allAgents.find(a => a.id === loadingAgentId)?.name ?? 'Agent'} is thinking…</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              // Agent bubble
+              return (
+                <div key={msg.id} className="animate-fade-in">
+                  <div className="flex items-start gap-2">
+                    <div
+                      className="h-7 w-7 rounded-full flex items-center justify-center text-[11px] font-bold text-primary-foreground shrink-0 mt-0.5"
+                      style={{ backgroundColor: `hsl(var(--agent-${agentColorIdx}))` }}
+                    >
+                      {agent?.name[0] ?? '?'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-1.5 mb-1">
+                        <span className="text-xs font-semibold" style={{ color: `hsl(var(--agent-${agentColorIdx}))` }}>
+                          {agent?.name}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground">{agent?.role}</span>
+                      </div>
+                      <div
+                        className="max-w-[80%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm"
+                        style={{
+                          backgroundColor: `hsl(var(--agent-${agentColorIdx}) / 0.13)`,
+                          borderWidth: 1,
+                          borderStyle: 'solid',
+                          borderColor: `hsl(var(--agent-${agentColorIdx}) / 0.3)`,
+                        }}
+                      >
+                        <div className={proseClasses}><ReactMarkdown>{msg.content}</ReactMarkdown></div>
+                        {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
+                          <CodeExecutionPanel blocks={msg.codeBlocks.filter(b => b.context === 'public')} />
+                        )}
+                        {msg.innerThoughts && agent && (
+                          <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
+                        )}
+                        {metaFooter}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // ---- DEFAULT MODE ----
             return (
               <div key={msg.id}>
                 <div className={`animate-fade-in ${isUser ? 'flex justify-end' : ''}`}>
@@ -931,8 +1100,8 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     : 'bg-card border border-border'
                 }`}
                   style={agent ? {
-                    backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}) / 0.12)`,
-                    borderColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}) / 0.3)`,
+                    backgroundColor: `hsl(var(--agent-${agentColorIdx}) / 0.12)`,
+                    borderColor: `hsl(var(--agent-${agentColorIdx}) / 0.3)`,
                   } : undefined}
                 >
                   {agent && (
@@ -940,7 +1109,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                       <div className={`h-5 w-5 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[10px] font-bold text-primary-foreground`}>
                         {agent.name[0]}
                       </div>
-                      <span className="font-semibold text-xs" style={{ color: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}>{agent.name}</span>
+                      <span className="font-semibold text-xs" style={{ color: `hsl(var(--agent-${agentColorIdx}))` }}>{agent.name}</span>
                       <span className="text-[10px] text-muted-foreground">{agent.role}</span>
                     </div>
                   )}
@@ -950,7 +1119,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                       <span className="font-medium text-xs">Summarizer</span>
                     </div>
                   )}
-                  <div className={`prose prose-sm max-w-none leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-xs [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded-md [&_blockquote]:border-accent [&_blockquote]:text-muted-foreground ${isUser ? 'prose-invert' : 'dark:prose-invert'}`}>
+                  <div className={proseClasses}>
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                   {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
@@ -959,31 +1128,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   {msg.innerThoughts && agent && (
                     <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
-                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
-                    <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    {msg.metadata && (
-                      <>
-                        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
-                          msg.metadata.provider === 'lovable' ? 'bg-accent/15 text-accent' :
-                          msg.metadata.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
-                          msg.metadata.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
-                          msg.metadata.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
-                          msg.metadata.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
-                          'bg-muted text-muted-foreground'
-                        }`}>
-                          {msg.metadata.provider === 'lovable' ? '⚡' :
-                           msg.metadata.provider === 'openai' ? '🟢' :
-                           msg.metadata.provider === 'anthropic' ? '🟠' :
-                           msg.metadata.provider === 'gemini' ? '🔵' :
-                           msg.metadata.provider === 'ollama' ? '🟣' : '⚙️'}
-                          {' '}{msg.metadata.provider}
-                        </span>
-                        <span className="text-muted-foreground/70 truncate max-w-[120px]" title={msg.metadata.model}>{msg.metadata.model}</span>
-                        {msg.metadata.tokensUsed != null && <span>{msg.metadata.tokensUsed} tok</span>}
-                        {msg.metadata.latencyMs != null && <span>{msg.metadata.latencyMs}ms</span>}
-                      </>
-                    )}
-                  </div>
+                  {metaFooter}
                 </div>
                 </div>
                 {/* Processing indicator after the last user message */}
@@ -1212,190 +1357,300 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
         </div>
       </div>
 
-      {/* Right panel - Agent roster */}
-      <div className={`border-l border-border bg-card w-72 flex-col overflow-y-auto ${showAgentPanel ? 'flex fixed inset-y-0 right-0 z-50 md:relative' : 'hidden md:flex'}`}>
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Agents</h3>
-          <button onClick={() => setShowAgentPanel(false)} className="md:hidden rounded p-1 text-muted-foreground hover:bg-muted">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="p-3 space-y-2">
-          {roomAgents.map((agent) => (
-            <div key={agent.id} className="rounded-md border border-border p-2.5 group">
-              <div className="flex items-center gap-2">
-                <div className={`h-6 w-6 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[11px] font-bold text-primary-foreground`}>
-                  {agent.name[0]}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-foreground truncate">{agent.name}</div>
-                  <div className="text-[10px] text-muted-foreground truncate">{agent.role}</div>
-                </div>
-                <button
-                  onClick={() => removeAgentFromRoom(agent.id)}
-                  className="opacity-0 group-hover:opacity-100 rounded p-0.5 text-muted-foreground hover:text-destructive"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              <button
-                onClick={() => triggerAgent(agent.id)}
-                disabled={!!loadingAgentId}
-                className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors disabled:opacity-50"
-              >
-                {loadingAgentId === agent.id
-                  ? (loopProgress
-                    ? `Loop ${loopProgress.currentLoop}/${loopProgress.totalLoops}: ${loopProgress.activity}`
-                    : 'Thinking…')
-                  : 'Speak now'}
-              </button>
-              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                {/* Provider/model badge */}
-                <span className={`inline-flex items-center gap-0.5 text-[9px] font-medium rounded px-1.5 py-0.5 ${
-                  agent.config.provider === 'lovable' ? 'bg-accent/15 text-accent' :
-                  agent.config.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
-                  agent.config.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
-                  agent.config.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
-                  agent.config.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
-                  'bg-muted text-muted-foreground'
-                }`}>
-                  {agent.config.provider === 'lovable' ? '⚡' :
-                   agent.config.provider === 'openai' ? '🟢' :
-                   agent.config.provider === 'anthropic' ? '🟠' :
-                   agent.config.provider === 'gemini' ? '🔵' :
-                   agent.config.provider === 'ollama' ? '🟣' : '⚙️'}
-                  {' '}
-                  <span className="max-w-[80px] truncate" title={agent.config.model}>
-                    {agent.config.model?.split('/').pop() || agent.config.provider}
-                  </span>
-                </span>
-                {agent.memoryEnabled && (agent.researchLoops || 0) > 0 && (
-                  <span className="text-[9px] text-accent bg-accent/10 rounded px-1.5 py-0.5">
-                    🔄 {agent.researchLoops} loops
-                  </span>
-                )}
-                {agent.memoryEnabled && (
-                  <button
-                    onClick={() => setMemoryPanelAgentId(memoryPanelAgentId === agent.id ? null : agent.id)}
-                    className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
-                  >
-                    <Database className="h-2.5 w-2.5" /> Memory
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-
-          {availableAgents.length > 0 && (
-            <div className="pt-2 border-t border-border">
-              <p className="text-[10px] text-muted-foreground mb-2">Add to room:</p>
-              {availableAgents.map((agent) => (
-                <button
-                  key={agent.id}
-                  onClick={() => addAgentToRoom(agent.id)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Plus className="h-3 w-3" />
-                  {agent.name}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {allAgents.length === 0 && (
-            <div className="text-center py-6">
-              <p className="text-xs text-muted-foreground mb-2">No agents created yet.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate('/agents')}>
-                Create Agents
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {/* Documents section */}
-        <div className="border-t border-border p-3">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Documents</p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-            >
-              <Plus className="h-3 w-3" />
+      {/* Right panel - Agent roster (hidden in bubble mode) */}
+      {!bubbleMode && (
+        <div className={`border-l border-border bg-card w-72 flex-col overflow-y-auto ${showAgentPanel ? 'flex fixed inset-y-0 right-0 z-50 md:relative' : 'hidden md:flex'}`}>
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <h3 className="text-sm font-semibold text-foreground">Agents</h3>
+            <button onClick={() => setShowAgentPanel(false)} className="md:hidden rounded p-1 text-muted-foreground hover:bg-muted">
+              <X className="h-4 w-4" />
             </button>
           </div>
-          {documents.length === 0 ? (
-            <div>
-              <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
-              <p className="text-[9px] text-muted-foreground/60 mt-1">Supports: PDF, Word, PowerPoint, Excel, images, text & code files</p>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {documents.map(doc => (
-                <div key={doc.id} className="flex items-center gap-1.5 text-[10px] group">
-                  <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
-                  <span className="text-foreground truncate flex-1">{doc.name}</span>
+
+          <div className="p-3 space-y-2">
+            {roomAgents.map((agent) => (
+              <div key={agent.id} className="rounded-md border border-border p-2.5 group">
+                <div className="flex items-center gap-2">
+                  <div className={`h-6 w-6 rounded-full bg-${getAgentColor(agent.colorIndex)} flex items-center justify-center text-[11px] font-bold text-primary-foreground`}>
+                    {agent.name[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-foreground truncate">{agent.name}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{agent.role}</div>
+                  </div>
                   <button
-                    onClick={() => removeDocument(doc.id)}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                    onClick={() => removeAgentFromRoom(agent.id)}
+                    className="opacity-0 group-hover:opacity-100 rounded p-0.5 text-muted-foreground hover:text-destructive"
                   >
-                    <X className="h-2.5 w-2.5" />
+                    <X className="h-3 w-3" />
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Past Meetings */}
-        {pastMeetings.length > 0 && (
-          <div className="border-t border-border p-3">
-            <button
-              onClick={() => setShowPastMeetings(!showPastMeetings)}
-              className="flex items-center gap-1.5 w-full text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
-            >
-              {showPastMeetings ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Past Meetings ({pastMeetings.length})
-            </button>
-            {showPastMeetings && (
-              <div className="mt-2 space-y-1.5">
-                {pastMeetings.slice(0, 5).map(m => (
-                  <div key={m.id} className="rounded border border-border p-2 bg-muted/20">
-                    <p className="text-[10px] font-medium text-foreground truncate">{m.topic}</p>
-                    <p className="text-[9px] text-muted-foreground">{m.durationMinutes}min • {new Date(m.createdAt).toLocaleDateString()}</p>
-                  </div>
-                ))}
                 <button
-                  onClick={() => navigate(`/room/${room.id}/history`)}
-                  className="w-full text-center text-[10px] text-accent hover:underline mt-1"
+                  onClick={() => triggerAgent(agent.id)}
+                  disabled={!!loadingAgentId}
+                  className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors disabled:opacity-50"
                 >
-                  View Full History →
+                  {loadingAgentId === agent.id
+                    ? (loopProgress
+                      ? `Loop ${loopProgress.currentLoop}/${loopProgress.totalLoops}: ${loopProgress.activity}`
+                      : 'Thinking…')
+                    : 'Speak now'}
                 </button>
+                <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                  <span className={`inline-flex items-center gap-0.5 text-[9px] font-medium rounded px-1.5 py-0.5 ${
+                    agent.config.provider === 'lovable' ? 'bg-accent/15 text-accent' :
+                    agent.config.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                    agent.config.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
+                    agent.config.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                    agent.config.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
+                    'bg-muted text-muted-foreground'
+                  }`}>
+                    {agent.config.provider === 'lovable' ? '⚡' :
+                     agent.config.provider === 'openai' ? '🟢' :
+                     agent.config.provider === 'anthropic' ? '🟠' :
+                     agent.config.provider === 'gemini' ? '🔵' :
+                     agent.config.provider === 'ollama' ? '🟣' : '⚙️'}
+                    {' '}
+                    <span className="max-w-[80px] truncate" title={agent.config.model}>
+                      {agent.config.model?.split('/').pop() || agent.config.provider}
+                    </span>
+                  </span>
+                  {agent.memoryEnabled && (agent.researchLoops || 0) > 0 && (
+                    <span className="text-[9px] text-accent bg-accent/10 rounded px-1.5 py-0.5">
+                      🔄 {agent.researchLoops} loops
+                    </span>
+                  )}
+                  {agent.memoryEnabled && (
+                    <button
+                      onClick={() => setMemoryPanelAgentId(memoryPanelAgentId === agent.id ? null : agent.id)}
+                      className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+                    >
+                      <Database className="h-2.5 w-2.5" /> Memory
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {availableAgents.length > 0 && (
+              <div className="pt-2 border-t border-border">
+                <p className="text-[10px] text-muted-foreground mb-2">Add to room:</p>
+                {availableAgents.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => addAgentToRoom(agent.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <Plus className="h-3 w-3" />
+                    {agent.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {allAgents.length === 0 && (
+              <div className="text-center py-6">
+                <p className="text-xs text-muted-foreground mb-2">No agents created yet.</p>
+                <Button variant="outline" size="sm" onClick={() => navigate('/agents')}>
+                  Create Agents
+                </Button>
               </div>
             )}
           </div>
-        )}
 
-        {/* Orchestration settings */}
-        <div className="mt-auto border-t border-border p-3">
-          <p className="text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">Balance</p>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">Debate</span>
-            <Slider
-              value={[room.balanceSlider]}
-              onValueChange={([v]) => {
-                const updated = { ...room, balanceSlider: v, updatedAt: new Date().toISOString() };
-                upsertRoom(updated);
-                setRoom(updated);
-              }}
-              max={100}
-              step={1}
-              className="flex-1"
-            />
-            <span className="text-[10px] text-muted-foreground">Equal</span>
+          {/* Documents section */}
+          <div className="border-t border-border p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Documents</p>
+              <button onClick={() => fileInputRef.current?.click()} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+            {documents.length === 0 ? (
+              <div>
+                <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
+                <p className="text-[9px] text-muted-foreground/60 mt-1">Supports: PDF, Word, PowerPoint, Excel, images, text & code files</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {documents.map(doc => (
+                  <div key={doc.id} className="flex items-center gap-1.5 text-[10px] group">
+                    <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <span className="text-foreground truncate flex-1">{doc.name}</span>
+                    <button onClick={() => removeDocument(doc.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Past Meetings */}
+          {pastMeetings.length > 0 && (
+            <div className="border-t border-border p-3">
+              <button
+                onClick={() => setShowPastMeetings(!showPastMeetings)}
+                className="flex items-center gap-1.5 w-full text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
+              >
+                {showPastMeetings ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                Past Meetings ({pastMeetings.length})
+              </button>
+              {showPastMeetings && (
+                <div className="mt-2 space-y-1.5">
+                  {pastMeetings.slice(0, 5).map(m => (
+                    <div key={m.id} className="rounded border border-border p-2 bg-muted/20">
+                      <p className="text-[10px] font-medium text-foreground truncate">{m.topic}</p>
+                      <p className="text-[9px] text-muted-foreground">{m.durationMinutes}min • {new Date(m.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  ))}
+                  <button onClick={() => navigate(`/room/${room.id}/history`)} className="w-full text-center text-[10px] text-accent hover:underline mt-1">
+                    View Full History →
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Balance */}
+          <div className="mt-auto border-t border-border p-3">
+            <p className="text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">Balance</p>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">Debate</span>
+              <Slider
+                value={[room.balanceSlider]}
+                onValueChange={([v]) => {
+                  const updated = { ...room, balanceSlider: v, updatedAt: new Date().toISOString() };
+                  upsertRoom(updated);
+                  setRoom(updated);
+                }}
+                max={100} step={1} className="flex-1"
+              />
+              <span className="text-[10px] text-muted-foreground">Equal</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Bubble mode: Sheet panel with all right-panel controls */}
+      {bubbleMode && (
+        <Sheet open={bubblePanelOpen} onOpenChange={setBubblePanelOpen}>
+          <SheetContent side="right" className="w-72 overflow-y-auto p-0">
+            <SheetHeader className="border-b border-border px-4 py-3">
+              <SheetTitle className="text-sm">Room Controls</SheetTitle>
+            </SheetHeader>
+            <div className="p-3 space-y-2">
+              {roomAgents.map((agent) => (
+                <div key={agent.id} className="rounded-md border border-border p-2.5 group">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-bold text-primary-foreground"
+                      style={{ backgroundColor: `hsl(var(--agent-${(agent.colorIndex % 6) + 1}))` }}
+                    >
+                      {agent.name[0]}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-foreground truncate">{agent.name}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">{agent.role}</div>
+                    </div>
+                    <button onClick={() => removeAgentFromRoom(agent.id)} className="opacity-0 group-hover:opacity-100 rounded p-0.5 text-muted-foreground hover:text-destructive">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => { triggerAgent(agent.id); setBubblePanelOpen(false); }}
+                    disabled={!!loadingAgentId}
+                    className="mt-2 w-full rounded bg-muted px-2 py-1 text-[10px] font-medium text-foreground hover:bg-muted-foreground/10 transition-colors disabled:opacity-50"
+                  >
+                    {loadingAgentId === agent.id ? 'Thinking…' : 'Speak now'}
+                  </button>
+                  {agent.memoryEnabled && (
+                    <button
+                      onClick={() => setMemoryPanelAgentId(memoryPanelAgentId === agent.id ? null : agent.id)}
+                      className="mt-1 text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+                    >
+                      <Database className="h-2.5 w-2.5" /> Memory
+                    </button>
+                  )}
+                </div>
+              ))}
+              {availableAgents.length > 0 && (
+                <div className="pt-2 border-t border-border">
+                  <p className="text-[10px] text-muted-foreground mb-2">Add to room:</p>
+                  {availableAgents.map((agent) => (
+                    <button key={agent.id} onClick={() => addAgentToRoom(agent.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+                      <Plus className="h-3 w-3" /> {agent.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Documents */}
+            <div className="border-t border-border p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Documents</p>
+                <button onClick={() => fileInputRef.current?.click()} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+              {documents.length === 0 ? (
+                <p className="text-[10px] text-muted-foreground italic">No documents loaded</p>
+              ) : (
+                <div className="space-y-1">
+                  {documents.map(doc => (
+                    <div key={doc.id} className="flex items-center gap-1.5 text-[10px] group">
+                      <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span className="text-foreground truncate flex-1">{doc.name}</span>
+                      <button onClick={() => removeDocument(doc.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Past Meetings */}
+            {pastMeetings.length > 0 && (
+              <div className="border-t border-border p-3">
+                <button onClick={() => setShowPastMeetings(!showPastMeetings)} className="flex items-center gap-1.5 w-full text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground">
+                  {showPastMeetings ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  Past Meetings ({pastMeetings.length})
+                </button>
+                {showPastMeetings && (
+                  <div className="mt-2 space-y-1.5">
+                    {pastMeetings.slice(0, 5).map(m => (
+                      <div key={m.id} className="rounded border border-border p-2 bg-muted/20">
+                        <p className="text-[10px] font-medium text-foreground truncate">{m.topic}</p>
+                        <p className="text-[9px] text-muted-foreground">{m.durationMinutes}min • {new Date(m.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    ))}
+                    <button onClick={() => navigate(`/room/${room.id}/history`)} className="w-full text-center text-[10px] text-accent hover:underline mt-1">
+                      View Full History →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Balance */}
+            <div className="border-t border-border p-3">
+              <p className="text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">Balance</p>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground">Debate</span>
+                <Slider
+                  value={[room.balanceSlider]}
+                  onValueChange={([v]) => {
+                    const updated = { ...room, balanceSlider: v, updatedAt: new Date().toISOString() };
+                    upsertRoom(updated);
+                    setRoom(updated);
+                  }}
+                  max={100} step={1} className="flex-1"
+                />
+                <span className="text-[10px] text-muted-foreground">Equal</span>
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
 
       {/* Agent Memory Panel */}
       {memoryPanelAgentId && (() => {
