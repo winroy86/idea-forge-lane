@@ -10,7 +10,7 @@ import {
 import { Room, Agent, Message, OrchestrationType, SummarizerAction, SummarizerSettings, LLMProvider, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId,
-  getMeetingSessions, saveMeetingSession, getActiveMeeting, getAppSettings
+  getMeetingSessions, saveMeetingSession, getActiveMeeting, getProviders
 } from '@/lib/store';
 import { callAgent, callSummarizer, ResearchLoopProgress } from '@/lib/llm';
 import { getDefaultLlmSelection } from '@/lib/providerSelection';
@@ -568,12 +568,11 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
     if (!room || loadingAgentId) return;
     setLoadingAgentId('summarizer');
     try {
-      // Use room-level summarizer override, or fall back to global app settings
-      const globalSettings = getAppSettings().summarizer;
+      // Use room-level summarizer override if set, otherwise fall back to Lovable AI
       const summarizerSettings: SummarizerSettings | undefined =
         room.summarizer?.provider && room.summarizer?.model
           ? room.summarizer
-          : (globalSettings.provider && globalSettings.model ? globalSettings : undefined);
+          : undefined;
 
       const result = await callSummarizer(action, messages, allAgents, summarizerSettings);
       const msg: Message = {
@@ -1078,7 +1077,6 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
           <Button variant="outline" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => runSummarizer('updateMemory')} disabled={!!loadingAgentId || messages.length === 0}>
             <Brain className="h-3 w-3" /> Update Memory
           </Button>
-          {/* Per-room summarizer provider/model settings */}
           <div className="ml-auto shrink-0">
             <Popover>
               <PopoverTrigger asChild>
@@ -1086,69 +1084,95 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   <Settings2 className="h-3 w-3" />
                   {room.summarizer?.provider
                     ? <span className="hidden sm:inline">{room.summarizer.provider}</span>
-                    : <span className="hidden sm:inline text-muted-foreground/60">global</span>
+                    : <span className="hidden sm:inline text-muted-foreground/60">Lovable AI</span>
                   }
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-72 p-3" align="end">
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-xs font-semibold text-foreground mb-0.5">Summarizer provider</p>
-                    <p className="text-[10px] text-muted-foreground mb-2">Override for this room. Leave on "Global default" to use Settings → Summarizer.</p>
-                  </div>
-                  <div>
-                    <Label className="text-[10px] text-muted-foreground">Provider</Label>
-                    <Select
-                      value={room.summarizer?.provider || '__global__'}
-                      onValueChange={(v) => {
-                        if (v === '__global__') {
-                          // Clear room-level override
-                          const updated: Room = { ...room, summarizer: undefined, updatedAt: new Date().toISOString() };
-                          upsertRoom(updated);
-                          setRoom(updated);
-                        } else {
-                          updateRoomSummarizer({ provider: v as LLMProvider });
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__global__">— Global default (Settings page) —</SelectItem>
-                        <SelectItem value="lovable">⚡ Lovable AI</SelectItem>
-                        <SelectItem value="openai">🟢 OpenAI</SelectItem>
-                        <SelectItem value="anthropic">🟠 Anthropic</SelectItem>
-                        <SelectItem value="gemini">🔵 Gemini</SelectItem>
-                        <SelectItem value="azure">Azure OpenAI</SelectItem>
-                        <SelectItem value="ollama">🟣 Ollama</SelectItem>
-                        <SelectItem value="custom">Custom</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {room.summarizer?.provider && (
-                    <>
+                {(() => {
+                  const configuredProviders = getProviders().filter(p => p.isActive);
+                  // Always include Lovable AI + all configured providers
+                  const providerOptions = [
+                    { id: '__lovable__', provider: 'lovable' as LLMProvider, label: '⚡ Lovable AI (built-in)', baseUrl: undefined },
+                    ...configuredProviders.map(p => ({ id: p.id, provider: p.provider, label: p.label, baseUrl: p.baseUrl })),
+                  ];
+
+                  const PROVIDER_DEFAULT_MODELS: Record<string, string[]> = {
+                    lovable: ['google/gemini-3-flash-preview', 'google/gemini-2.5-flash', 'google/gemini-2.5-pro', 'openai/gpt-5-mini', 'openai/gpt-5'],
+                    openai: ['gpt-4o-mini', 'gpt-4o', 'o1-mini', 'o3-mini'],
+                    anthropic: ['claude-haiku-4-20250514', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
+                    gemini: ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                    azure: ['gpt-4o-mini', 'gpt-4o'],
+                    ollama: [],
+                    custom: [],
+                  };
+
+                  const selectedKey = room.summarizer?.provider
+                    ? (room.summarizer.provider === 'lovable' ? '__lovable__' : configuredProviders.find(p => p.provider === room.summarizer?.provider && p.baseUrl === room.summarizer?.baseUrl)?.id || room.summarizer.provider)
+                    : '__lovable__';
+
+                  const selectedProviderObj = room.summarizer?.provider || 'lovable';
+                  const modelOptions = PROVIDER_DEFAULT_MODELS[selectedProviderObj] || [];
+
+                  return (
+                    <div className="space-y-3">
                       <div>
-                        <Label className="text-[10px] text-muted-foreground">Model</Label>
-                        <input
-                          className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                          value={room.summarizer?.model || ''}
-                          onChange={e => updateRoomSummarizer({ model: e.target.value })}
-                          placeholder="e.g. gpt-4o-mini"
-                        />
+                        <p className="text-xs font-semibold text-foreground mb-0.5">Summarizer provider</p>
+                        <p className="text-[10px] text-muted-foreground mb-2">Select from your configured providers. Defaults to Lovable AI.</p>
                       </div>
-                      {(room.summarizer.provider === 'ollama' || room.summarizer.provider === 'custom' || room.summarizer.provider === 'azure') && (
+                      <div>
+                        <Label className="text-[10px] text-muted-foreground">Provider</Label>
+                        <Select
+                          value={selectedKey}
+                          onValueChange={(v) => {
+                            if (v === '__lovable__') {
+                              const updated: Room = { ...room, summarizer: undefined, updatedAt: new Date().toISOString() };
+                              upsertRoom(updated);
+                              setRoom(updated);
+                            } else {
+                              const picked = providerOptions.find(p => p.id === v);
+                              if (!picked) return;
+                              const defaultModels = PROVIDER_DEFAULT_MODELS[picked.provider] || [];
+                              updateRoomSummarizer({ provider: picked.provider, model: defaultModels[0] || '', baseUrl: picked.baseUrl });
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {providerOptions.map(p => (
+                              <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {room.summarizer?.provider && (
                         <div>
-                          <Label className="text-[10px] text-muted-foreground">Base URL</Label>
-                          <input
-                            className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                            value={room.summarizer?.baseUrl || ''}
-                            onChange={e => updateRoomSummarizer({ baseUrl: e.target.value || undefined })}
-                            placeholder="e.g. http://localhost:11434/v1"
-                          />
+                          <Label className="text-[10px] text-muted-foreground">Model</Label>
+                          {modelOptions.length > 0 ? (
+                            <Select
+                              value={room.summarizer?.model || modelOptions[0]}
+                              onValueChange={v => updateRoomSummarizer({ model: v })}
+                            >
+                              <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {modelOptions.map(m => (
+                                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Input
+                              className="mt-1 h-8 text-xs"
+                              value={room.summarizer?.model || ''}
+                              onChange={e => updateRoomSummarizer({ model: e.target.value })}
+                              placeholder="e.g. llama3.2"
+                            />
+                          )}
                         </div>
                       )}
-                    </>
-                  )}
-                </div>
+                    </div>
+                  );
+                })()}
               </PopoverContent>
             </Popover>
           </div>
