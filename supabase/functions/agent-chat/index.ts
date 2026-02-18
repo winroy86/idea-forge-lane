@@ -501,19 +501,26 @@ serve(async (req) => {
 
     // For non-lovable providers without an inline api_key, look up the user's stored key
     let resolvedApiKey = api_key;
+    let resolvedBaseUrl = base_url;
     if (!resolvedApiKey && provider !== 'lovable' && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
       const authHeader = req.headers.get("Authorization") || "";
       const token = authHeader.replace("Bearer ", "").trim();
       if (token) {
         try {
           const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-          const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-          const { data: userData } = await admin.auth.getUser(token);
-          if (userData?.user?.id) {
+          // Use getClaims() — the modern, reliable JWT verification approach
+          const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+          const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            global: { headers: { Authorization: authHeader } },
+          });
+          const { data: claimsData } = await anonClient.auth.getClaims(token);
+          const userId = claimsData?.claims?.sub as string | undefined;
+          if (userId) {
+            const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
             const { data: creds } = await admin
               .from("user_provider_credentials")
               .select("api_key, base_url")
-              .eq("user_id", userData.user.id)
+              .eq("user_id", userId)
               .eq("provider", provider)
               .eq("is_active", true)
               .order("updated_at", { ascending: false })
@@ -521,10 +528,8 @@ serve(async (req) => {
               .maybeSingle();
             if (creds?.api_key) resolvedApiKey = creds.api_key;
             // Also use stored base_url if not passed explicitly
-            if (!base_url && creds?.base_url) {
-              // Will be used below via resolvedBaseUrl
-              (req as any)._resolvedBaseUrl = creds.base_url;
-            }
+            if (!resolvedBaseUrl && creds?.base_url) resolvedBaseUrl = creds.base_url;
+            console.log(`User ${userId} credentials resolved for provider "${provider}": key=${resolvedApiKey ? 'found' : 'not found'}`);
           }
         } catch (e) {
           console.warn("Failed to look up user provider credentials:", e);
@@ -620,7 +625,7 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url, !!OPENAI_API_KEY_ENV, resolvedModel);
+    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, resolvedBaseUrl, !!OPENAI_API_KEY_ENV, resolvedModel);
     if (isOpenAICompatibleProvider(provider) && !targetBaseUrl) {
       throw new Error(`No base URL configured for provider: ${provider}`);
     }
