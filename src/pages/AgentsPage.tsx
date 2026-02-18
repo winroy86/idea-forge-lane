@@ -58,6 +58,41 @@ const LOVABLE_MODELS = [
   { value: 'openai/gpt-5', label: 'GPT-5 (Powerful)' },
 ];
 
+// Preset model lists for providers that have well-known models
+const PROVIDER_PRESET_MODELS: Record<string, { value: string; label: string }[]> = {
+  openai: [
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    { value: 'gpt-4', label: 'GPT-4' },
+    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+    { value: 'o1', label: 'o1 (Reasoning)' },
+    { value: 'o1-mini', label: 'o1 Mini' },
+    { value: 'o3-mini', label: 'o3 Mini' },
+  ],
+  anthropic: [
+    { value: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
+    { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+    { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (Fast)' },
+    { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+    { value: 'claude-haiku-3-20240307', label: 'Claude Haiku 3 (Fast)' },
+  ],
+  gemini: [
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+  ],
+  azure: [
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4', label: 'GPT-4' },
+    { value: 'gpt-35-turbo', label: 'GPT-3.5 Turbo' },
+  ],
+};
+
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   lovable: '⚡ Lovable AI',
   openai: 'OpenAI',
@@ -114,6 +149,10 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [mcpAuthToken, setMcpAuthToken] = useState('');
   const [mcpAuthHeader, setMcpAuthHeader] = useState('');
   const [configuredProviders, setConfiguredProviders] = useState(() => getConfiguredProviderOptions());
+  // Preset models for the selected provider (null = use text input)
+  const presetModels = form.config.provider !== 'lovable' && form.config.provider !== 'ollama'
+    ? (PROVIDER_PRESET_MODELS[form.config.provider] ?? null)
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -228,23 +267,10 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
               <Label>Model</Label>
               {form.config.provider === 'lovable' ? (
                 <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select a model" /></SelectTrigger>
                   <SelectContent>
                     {LOVABLE_MODELS.map(m => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
-                <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ollamaModels.map(m => (
-                      <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -252,6 +278,31 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                 <div className="flex items-center gap-2 h-10 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" /> Detecting models...
                 </div>
+              ) : form.config.provider === 'ollama' && ollamaModels.length > 0 ? (
+                <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select a model" /></SelectTrigger>
+                  <SelectContent>
+                    {ollamaModels.map(m => (
+                      <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : presetModels ? (
+                <Select
+                  value={form.config.model}
+                  onValueChange={v => updateConfig({ model: v })}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select a model" /></SelectTrigger>
+                  <SelectContent>
+                    {presetModels.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                    {/* Allow custom entry if the current model isn't in the list */}
+                    {form.config.model && !presetModels.find(m => m.value === form.config.model) && (
+                      <SelectItem value={form.config.model}>{form.config.model} (custom)</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
               ) : (
                 <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="e.g. gpt-4o-mini" />
               )}
