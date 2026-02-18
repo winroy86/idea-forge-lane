@@ -449,8 +449,12 @@ function isOpenAICompatibleProvider(provider: string): boolean {
   return provider === 'lovable' || provider === 'openai' || provider === 'azure' || provider === 'ollama' || provider === 'custom';
 }
 
-function resolveOpenAICompatibleBaseUrl(provider: string, baseUrl?: string, hasOpenAIKey?: boolean): string {
-  if (provider === 'lovable') return hasOpenAIKey ? 'https://api.openai.com/v1' : 'https://ai.gateway.lovable.dev/v1';
+function resolveOpenAICompatibleBaseUrl(provider: string, baseUrl?: string, hasOpenAIKey?: boolean, model?: string): string {
+  if (provider === 'lovable') {
+    // Google/Gemini models must go through the Lovable gateway regardless of OPENAI_API_KEY
+    const isGeminiModel = model && (model.startsWith('google/') || model.startsWith('gemini-'));
+    return (hasOpenAIKey && !isGeminiModel) ? 'https://api.openai.com/v1' : 'https://ai.gateway.lovable.dev/v1';
+  }
   if (provider === 'openai') return 'https://api.openai.com/v1';
   if (provider === 'ollama') return baseUrl || 'http://localhost:11434/v1';
   if (provider === 'azure') return baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT';
@@ -489,12 +493,15 @@ serve(async (req) => {
 
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    // Prefer OPENAI_API_KEY for lovable provider; fall back to LOVABLE_API_KEY
+    // For lovable provider: key selection depends on model — resolved later after model is known
+    // For now store both and select after resolvedModel is determined
+    const openAiKey = OPENAI_API_KEY;
+    const lovableKey = LOVABLE_API_KEY;
     const providerApiKey = provider === 'lovable'
-      ? (OPENAI_API_KEY || LOVABLE_API_KEY)
+      ? (openAiKey || lovableKey)  // will be corrected below after model resolution
       : api_key;
-    if (!providerApiKey) {
-      throw new Error(provider === 'lovable' ? 'No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)' : `Missing API key for provider: ${provider}`);
+    if (!providerApiKey && provider !== 'lovable') {
+      throw new Error(`Missing API key for provider: ${provider}`);
     }
 
     // Populate MCP auth configs from incoming server data
@@ -541,10 +548,24 @@ serve(async (req) => {
     }
 
     const OPENAI_API_KEY_ENV = Deno.env.get("OPENAI_API_KEY");
-    // When provider is 'lovable' and OPENAI_API_KEY is set, use gpt-4o-mini as default
-    const resolvedModel = (provider === 'lovable' && OPENAI_API_KEY_ENV && !model)
+    // Resolve the model: if provider is 'lovable' and no model is specified, use gpt-4o-mini when OPENAI_API_KEY is set, else Gemini flash
+    const incomingModel = model || (provider === 'lovable' ? "google/gemini-3-flash-preview" : "gpt-4o-mini");
+    const isGeminiModel = incomingModel.startsWith('google/') || incomingModel.startsWith('gemini-');
+    // If lovable provider with OPENAI_API_KEY, use gpt-4o-mini only when no explicit model and it's not a Gemini model
+    const resolvedModel = (provider === 'lovable' && OPENAI_API_KEY_ENV && !model && !isGeminiModel)
       ? "gpt-4o-mini"
-      : (model || (provider === 'lovable' ? "google/gemini-3-flash-preview" : "gpt-4o-mini"));
+      : incomingModel;
+
+    // Re-resolve the API key now that we know the model:
+    // Gemini/Google models go through the Lovable gateway → use LOVABLE_API_KEY
+    // Other models for lovable provider → use OPENAI_API_KEY
+    const resolvedIsGemini = resolvedModel.startsWith('google/') || resolvedModel.startsWith('gemini-');
+    const finalApiKey = provider === 'lovable'
+      ? (resolvedIsGemini ? lovableKey : (openAiKey || lovableKey))
+      : api_key;
+    if (!finalApiKey) {
+      throw new Error(provider === 'lovable' ? 'No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)' : `Missing API key for provider: ${provider}`);
+    }
 
     const body: Record<string, unknown> = {
       model: resolvedModel,
@@ -561,20 +582,20 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url, !!OPENAI_API_KEY_ENV);
+    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url, !!OPENAI_API_KEY_ENV, resolvedModel);
     if (isOpenAICompatibleProvider(provider) && !targetBaseUrl) {
       throw new Error(`No base URL configured for provider: ${provider}`);
     }
 
     let response = isOpenAICompatibleProvider(provider)
-      ? await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, body, provider)
+      ? await callOpenAICompatibleProvider(targetBaseUrl, finalApiKey, body, provider)
       : null;
 
     if (!response) {
       if (provider === 'anthropic') {
         response = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
-          headers: buildProviderHeaders(provider, providerApiKey),
+          headers: buildProviderHeaders(provider, finalApiKey),
           body: JSON.stringify({
             model: model || 'claude-sonnet-4-20250514',
             max_tokens: max_tokens ?? 2048,
@@ -589,7 +610,7 @@ serve(async (req) => {
         });
       } else if (provider === 'gemini') {
         const geminiModel = model || 'gemini-2.0-flash';
-        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${providerApiKey}`, {
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${finalApiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -616,7 +637,7 @@ serve(async (req) => {
       const bodyNoTools = { ...body };
       delete bodyNoTools.tools;
       delete bodyNoTools.tool_choice;
-      response = await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, bodyNoTools, provider);
+      response = await callOpenAICompatibleProvider(targetBaseUrl, finalApiKey, bodyNoTools, provider);
     }
 
     if (!response.ok) {
@@ -720,7 +741,7 @@ serve(async (req) => {
       }
 
       body.messages = updatedMessages;
-      const followUp = await callOpenAICompatibleProvider(targetBaseUrl, providerApiKey, body, provider);
+      const followUp = await callOpenAICompatibleProvider(targetBaseUrl, finalApiKey, body, provider);
 
       if (!followUp.ok) {
         const errText = await followUp.text();
