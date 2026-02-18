@@ -38,6 +38,11 @@ serve(async (req) => {
 
     if (req.method === "POST") {
       const body = await req.json();
+      // Lovable provider doesn't need an API key
+      if (body.provider === 'lovable') {
+        return new Response(JSON.stringify({ provider: { provider: 'lovable', label: body.label || 'Lovable AI' } }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       let apiKey = body.apiKey;
       if (!apiKey || apiKey === "unchanged") {
         const { data: existing } = await admin
@@ -48,7 +53,7 @@ serve(async (req) => {
           .maybeSingle();
         apiKey = existing?.api_key;
       }
-      if (!apiKey) throw new Error("apiKey is required");
+      if (!apiKey) throw new Error("apiKey is required for this provider");
 
       const payload = {
         id: body.id,

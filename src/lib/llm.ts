@@ -253,15 +253,18 @@ async function callGemini(
   };
 }
 
-// ---- Lovable AI (via edge function) ----
+// ---- Cloud edge function proxy (Lovable AI + user providers via server-side key lookup) ----
 
-async function callLovableAI(
+async function callViaEdgeFunction(
+  provider: string,
   model: string,
   system: string,
   history: { role: string; content: string }[],
   agent: Agent,
   toolsEnabled?: string[],
   mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
+  baseUrl?: string,
+  apiKey?: string,
 ): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -270,7 +273,8 @@ async function callLovableAI(
   }
 
   const bodyPayload: Record<string, unknown> = {
-    model: model || 'google/gemini-3-flash-preview',
+    provider,
+    model: model || (provider === 'lovable' ? 'google/gemini-3-flash-preview' : 'gpt-4o-mini'),
     messages: [
       { role: 'system', content: system },
       ...history,
@@ -282,6 +286,10 @@ async function callLovableAI(
     frequency_penalty: agent.config.frequencyPenalty,
     tools_enabled: toolsEnabled,
   };
+
+  if (baseUrl) bodyPayload.base_url = baseUrl;
+  // Only send api_key if provided (local dev mode); otherwise edge function fetches from server
+  if (apiKey) bodyPayload.api_key = apiKey;
 
   if (mcpServers && mcpServers.length > 0) {
     bodyPayload.mcp_servers = mcpServers;
@@ -300,19 +308,31 @@ async function callLovableAI(
     const err = await res.text();
     try {
       const parsed = JSON.parse(err);
-      throw new Error(parsed.error || `Lovable AI error (${res.status})`);
+      throw new Error(parsed.error || `AI provider error (${res.status})`);
     } catch (e) {
       if (e instanceof Error && e.message !== `Unexpected token`) throw e;
-      throw new Error(`Lovable AI error (${res.status}): ${err}`);
+      throw new Error(`AI provider error (${res.status}): ${err}`);
     }
   }
 
   const data = await res.json();
   return {
-    content: data.choices?.[0]?.message?.content || 'No response',
+    content: data.content || data.choices?.[0]?.message?.content || 'No response',
     usage: data.usage,
-    toolCallsMade: data._toolCallsMade,
+    toolCallsMade: data.toolCallsMade,
   };
+}
+
+// Convenience wrapper for Lovable AI
+async function callLovableAI(
+  model: string,
+  system: string,
+  history: { role: string; content: string }[],
+  agent: Agent,
+  toolsEnabled?: string[],
+  mcpServers?: Array<{ id: string; name: string; url: string; tools: string[]; enabled: boolean }>,
+): Promise<{ content: string; usage?: { total_tokens?: number }; toolCallsMade?: Array<{ tool: string; query: string; result: string; sources: string[] }> }> {
+  return callViaEdgeFunction('lovable', model, system, history, agent, toolsEnabled, mcpServers);
 }
 
 // ---- Main entry point ----
@@ -342,7 +362,8 @@ export async function callAgent(
   meetingContext?: MeetingContext,
 ): Promise<LLMResponse> {
   await waitForProviderHydration();
-  if (agent.config.provider !== 'lovable' && !isBackendModeEnabled) {
+  const hasCloudBackend = !!import.meta.env.VITE_SUPABASE_URL;
+  if (agent.config.provider !== 'lovable' && !isBackendModeEnabled && !hasCloudBackend) {
     const provider = findProvider(agent.config.provider, agent.config.baseUrl);
     if (!provider) {
       throw new Error(`No active provider configured for "${agent.config.provider}". Go to Providers to add an API key.`);
@@ -639,6 +660,8 @@ async function callProviderRaw(
     };
   }
 
+  const hasCloudBackend = !!import.meta.env.VITE_SUPABASE_URL;
+
   switch (agent.config.provider) {
     case 'lovable': {
       const result = await callLovableAI(agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
@@ -648,18 +671,33 @@ async function callProviderRaw(
       break;
     }
     case 'anthropic': {
-      const provider = findProvider('anthropic')!;
-      const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
-      content = result.content;
-      tokensUsed = result.usage
-        ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0)
-        : undefined;
+      const provider = findProvider('anthropic');
+      // If no local API key (server-side stored), route through edge function
+      if (!provider?.apiKey && hasCloudBackend) {
+        const result = await callViaEdgeFunction('anthropic', agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
+        content = result.content;
+        tokensUsed = result.usage?.total_tokens;
+        toolCallsMade = result.toolCallsMade;
+      } else {
+        if (!provider?.apiKey) throw new Error('No Anthropic API key configured. Add it in the Providers page.');
+        const result = await callAnthropic(provider.apiKey, agent.config.model, system, history, agent);
+        content = result.content;
+        tokensUsed = result.usage ? (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0) : undefined;
+      }
       break;
     }
     case 'gemini': {
-      const provider = findProvider('gemini')!;
-      const result = await callGemini(provider.apiKey, agent.config.model, system, history, agent);
-      content = result.content;
+      const provider = findProvider('gemini');
+      if (!provider?.apiKey && hasCloudBackend) {
+        const result = await callViaEdgeFunction('gemini', agent.config.model, system, history, agent, toolsEnabled, mcpServers.length > 0 ? mcpServers : undefined);
+        content = result.content;
+        tokensUsed = result.usage?.total_tokens;
+        toolCallsMade = result.toolCallsMade;
+      } else {
+        if (!provider?.apiKey) throw new Error('No Gemini API key configured. Add it in the Providers page.');
+        const result = await callGemini(provider.apiKey, agent.config.model, system, history, agent);
+        content = result.content;
+      }
       break;
     }
     case 'openai':
@@ -667,21 +705,40 @@ async function callProviderRaw(
     case 'ollama':
     case 'custom':
     default: {
-      const provider = findProvider(agent.config.provider, agent.config.baseUrl)!;
+      const provider = findProvider(agent.config.provider, agent.config.baseUrl);
       const baseUrl =
         agent.config.provider === 'ollama'
-          ? (provider.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
+          ? (provider?.baseUrl || agent.config.baseUrl || 'http://localhost:11434/v1')
           : agent.config.provider === 'azure'
-          ? (provider.baseUrl || agent.config.baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT')
+          ? (provider?.baseUrl || agent.config.baseUrl || '')
           : agent.config.provider === 'custom'
-          ? (provider.baseUrl || agent.config.baseUrl || '')
+          ? (provider?.baseUrl || agent.config.baseUrl || '')
           : 'https://api.openai.com/v1';
 
-      if (!baseUrl) throw new Error('No base URL configured for custom provider.');
-
-      const result = await callOpenAICompatible(provider.apiKey, baseUrl, agent.config.model, system, history, agent);
-      content = result.content;
-      tokensUsed = result.usage?.total_tokens;
+      // If no local API key (server-side stored), route through edge function
+      if (!provider?.apiKey && hasCloudBackend) {
+        const result = await callViaEdgeFunction(
+          agent.config.provider,
+          agent.config.model,
+          system,
+          history,
+          agent,
+          toolsEnabled,
+          mcpServers.length > 0 ? mcpServers : undefined,
+          baseUrl || undefined,
+        );
+        content = result.content;
+        tokensUsed = result.usage?.total_tokens;
+        toolCallsMade = result.toolCallsMade;
+      } else {
+        if (!provider?.apiKey && agent.config.provider !== 'ollama') {
+          throw new Error(`No API key configured for "${agent.config.provider}". Add it in the Providers page.`);
+        }
+        if (!baseUrl) throw new Error('No base URL configured for custom provider.');
+        const result = await callOpenAICompatible(provider?.apiKey || '', baseUrl, agent.config.model, system, history, agent);
+        content = result.content;
+        tokensUsed = result.usage?.total_tokens;
+      }
       break;
     }
   }
