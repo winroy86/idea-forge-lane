@@ -665,7 +665,7 @@ serve(async (req) => {
         let toolResult = "";
 
         if (fnName === "web_search") {
-          const query = args.query || "";
+          const query: string = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
           const searchModel = typeof model === "string" && model ? model : "google/gemini-3-flash-preview";
           const searchResult = await performWebSearch(query, LOVABLE_API_KEY, searchModel);

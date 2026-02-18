@@ -20,6 +20,7 @@ const KEYS = {
   providers: 'br_providers',
   meetings: 'br_meetings',
   settings: 'br_settings',
+  localDevMode: 'br_localDevMode',
 };
 
 // Rooms

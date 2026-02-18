@@ -48,7 +48,8 @@ function normalizeKeyMaterial(value: string): Uint8Array {
 }
 
 async function importAesKey(raw: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', normalizeKeyMaterial(raw), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  const keyMaterial = normalizeKeyMaterial(raw);
+  return crypto.subtle.importKey('raw', keyMaterial.buffer as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
 export function loadProviderKeyringFromEnv(env: Record<string, string | undefined> = Deno.env.toObject()): ProviderKeyring {
@@ -117,7 +118,7 @@ export async function decryptProviderSecret(
   combined.set(tag, ciphertext.length);
 
   try {
-    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, combined);
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv.buffer as ArrayBuffer }, key, combined.buffer as ArrayBuffer);
     return new TextDecoder().decode(plaintext);
   } catch {
     throw new Error(
