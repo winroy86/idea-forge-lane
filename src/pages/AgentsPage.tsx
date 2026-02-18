@@ -58,15 +58,30 @@ const LOVABLE_MODELS = [
   { value: 'openai/gpt-5', label: 'GPT-5 (Powerful)' },
 ];
 
-const PROVIDERS: { value: LLMProvider; label: string }[] = [
-  { value: 'lovable', label: '⚡ Lovable AI' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'gemini', label: 'Google Gemini' },
-  { value: 'azure', label: 'Azure OpenAI' },
-  { value: 'ollama', label: 'Ollama' },
-  { value: 'custom', label: 'Custom Endpoint' },
-];
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  lovable: '⚡ Lovable AI',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Google Gemini',
+  azure: 'Azure OpenAI',
+  ollama: 'Ollama',
+  custom: 'Custom',
+};
+
+// Returns [lovable entry] + all user-configured active providers
+function getConfiguredProviderOptions() {
+  const configured = getProviders().filter(p => p.isActive);
+  return [
+    { id: '__lovable__', provider: 'lovable' as LLMProvider, label: '⚡ Lovable AI', baseUrl: undefined, apiKey: undefined },
+    ...configured.map(p => ({
+      id: p.id,
+      provider: p.provider,
+      label: p.label || PROVIDER_DISPLAY_NAMES[p.provider] || p.provider,
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+    })),
+  ];
+}
 
 function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: (a: Agent) => void; onClose: () => void }) {
   const [form, setForm] = useState<Agent>(
@@ -98,6 +113,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [mcpAuthType, setMcpAuthType] = useState<McpAuthType>('none');
   const [mcpAuthToken, setMcpAuthToken] = useState('');
   const [mcpAuthHeader, setMcpAuthHeader] = useState('');
+  const [configuredProviders, setConfiguredProviders] = useState(() => getConfiguredProviderOptions());
 
   useEffect(() => {
     let cancelled = false;
@@ -185,19 +201,26 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
             <div>
               <Label>Provider</Label>
               <Select
-                value={form.config.provider}
+                value={
+                  form.config.provider === 'lovable'
+                    ? '__lovable__'
+                    : configuredProviders.find(p => p.provider === form.config.provider && (p.baseUrl === form.config.baseUrl || !p.baseUrl))?.id || form.config.provider
+                }
                 onValueChange={v => {
-                  const provider = v as LLMProvider;
-                  const selection = getDefaultLlmSelection({
-                    provider,
-                    preferredModel: form.config.model,
-                  });
-                  updateConfig(selection);
+                  if (v === '__lovable__') {
+                    updateConfig({ provider: 'lovable', model: LOVABLE_MODELS[0].value, baseUrl: undefined });
+                  } else {
+                    const picked = configuredProviders.find(p => p.id === v);
+                    if (!picked) return;
+                    const defaultModel = DEFAULT_MODELS[picked.provider] || '';
+                    updateConfig({ provider: picked.provider, model: defaultModel, baseUrl: picked.baseUrl });
+                  }
+                  setConfiguredProviders(getConfiguredProviderOptions());
                 }}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {PROVIDERS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                  {configuredProviders.map(p => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -230,7 +253,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                   <Loader2 className="h-3 w-3 animate-spin" /> Detecting models...
                 </div>
               ) : (
-                <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="gpt-4" />
+                <Input value={form.config.model} onChange={e => updateConfig({ model: e.target.value })} placeholder="e.g. gpt-4o-mini" />
               )}
             </div>
           </div>
@@ -565,7 +588,21 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
   const [description, setDescription] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
+  const [personaProviders] = useState(() => getConfiguredProviderOptions());
+  // Default to first configured non-lovable provider, or lovable
+  const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
+    const opts = getConfiguredProviderOptions();
+    const nonLovable = opts.find(p => p.id !== '__lovable__');
+    return nonLovable?.id || '__lovable__';
+  });
+  const [personaModel, setPersonaModel] = useState<string>(() => {
+    const opts = getConfiguredProviderOptions();
+    const nonLovable = opts.find(p => p.id !== '__lovable__');
+    return nonLovable ? (DEFAULT_MODELS[nonLovable.provider] || '') : LOVABLE_MODELS[0].value;
+  });
   const { toast } = useToast();
+
+  const selectedProviderObj = personaProviders.find(p => p.id === selectedProviderId);
 
   const filteredSuggestions = FAMOUS_SUGGESTIONS.filter(name =>
     name.toLowerCase().includes(searchFilter.toLowerCase())
@@ -586,8 +623,18 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
 
     setIsGenerating(true);
     try {
-      // Use Lovable AI by default for persona generation
-      const llm = getDefaultLlmSelection('google/gemini-2.5-flash');
+      // Build llm selection from chosen provider
+      let llm: { provider: string; model: string; apiKey?: string; baseUrl?: string };
+      if (selectedProviderId === '__lovable__' || !selectedProviderObj) {
+        llm = { provider: 'lovable', model: personaModel || LOVABLE_MODELS[0].value };
+      } else {
+        llm = {
+          provider: selectedProviderObj.provider,
+          model: personaModel || DEFAULT_MODELS[selectedProviderObj.provider] || '',
+          baseUrl: selectedProviderObj.baseUrl,
+        };
+      }
+
       const { data, error } = await supabase.functions.invoke('generate-persona', {
         body: mode === 'famous'
           ? { personName: personName.trim(), description: description.trim(), llm }
@@ -719,6 +766,57 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
             />
           </div>
         )}
+
+        {/* Provider & Model selection */}
+        <div className="rounded-md border border-border p-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">AI Provider for generation</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-[10px] text-muted-foreground">Provider</Label>
+              <Select
+                value={selectedProviderId}
+                onValueChange={v => {
+                  setSelectedProviderId(v);
+                  const picked = personaProviders.find(p => p.id === v);
+                  if (picked) {
+                    setPersonaModel(
+                      picked.id === '__lovable__'
+                        ? LOVABLE_MODELS[0].value
+                        : DEFAULT_MODELS[picked.provider] || ''
+                    );
+                  }
+                }}
+              >
+                <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {personaProviders.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">Model</Label>
+              {selectedProviderId === '__lovable__' ? (
+                <Select value={personaModel} onValueChange={setPersonaModel}>
+                  <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {LOVABLE_MODELS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  className="mt-1 h-8 text-xs"
+                  value={personaModel}
+                  onChange={e => setPersonaModel(e.target.value)}
+                  placeholder={DEFAULT_MODELS[selectedProviderObj?.provider || 'openai'] || 'model name'}
+                />
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* Generate animation */}
         {isGenerating && (
