@@ -272,6 +272,21 @@ async function callViaEdgeFunction(
     throw new Error('Cloud provider is disabled. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
   }
 
+  // Use the user's session JWT so the edge function can look up their stored API keys.
+  // Fall back to the anon key only when no session exists (e.g. local/demo mode).
+  let authToken = supabaseKey;
+  try {
+    const { supabase: supabaseClient } = await import('@/integrations/supabase/client');
+    if (supabaseClient) {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session?.access_token) {
+        authToken = session.access_token;
+      }
+    }
+  } catch {
+    // ignore — fall back to anon key
+  }
+
   const bodyPayload: Record<string, unknown> = {
     provider,
     model: model || (provider === 'lovable' ? 'google/gemini-3-flash-preview' : 'gpt-4o-mini'),
@@ -299,7 +314,7 @@ async function callViaEdgeFunction(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${supabaseKey}`,
+      Authorization: `Bearer ${authToken}`,
     },
     body: JSON.stringify(bodyPayload),
   });

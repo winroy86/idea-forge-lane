@@ -14,7 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      user_provider_credentials: {
+        Row: {
+          api_key: string | null
+          base_url: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string
+          provider: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          api_key?: string | null
+          base_url?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string
+          provider: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          api_key?: string | null
+          base_url?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string
+          provider?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
