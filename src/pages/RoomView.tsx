@@ -1060,6 +1060,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                         </span>
                         <span className="text-[9px] text-muted-foreground">{agent?.role}</span>
                       </div>
+                      {/* Public response bubble */}
                       <div
                         className="max-w-[80%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm"
                         style={{
@@ -1073,11 +1074,14 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                         {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
                           <CodeExecutionPanel blocks={msg.codeBlocks.filter(b => b.context === 'public')} />
                         )}
-                        {msg.innerThoughts && agent && (
-                          <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
-                        )}
                         {metaFooter}
                       </div>
+                      {/* Inner thoughts — OUTSIDE the bubble, clearly separated, only visible to user */}
+                      {msg.innerThoughts && agent && (
+                        <div className="mt-1.5 max-w-[80%]">
+                          <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1122,15 +1126,19 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   <div className={proseClasses}>
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
+                  {/* Public code blocks only — inside the card */}
                   {msg.codeBlocks && msg.codeBlocks.filter(b => b.context === 'public').length > 0 && (
                     <CodeExecutionPanel blocks={msg.codeBlocks.filter(b => b.context === 'public')} />
-                  )}
-                  {msg.innerThoughts && agent && (
-                    <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
                   )}
                   {metaFooter}
                 </div>
                 </div>
+                {/* Inner thoughts — OUTSIDE the colored card, clearly separated, only visible to you */}
+                {msg.innerThoughts && agent && (
+                  <div className="mt-1 max-w-[85%]">
+                    <InnerThoughtsBlock thoughts={msg.innerThoughts} agentName={agent.name} codeBlocks={msg.codeBlocks?.filter(b => b.context === 'inner')} />
+                  </div>
+                )}
                 {/* Processing indicator after the last user message */}
                 {isUser && loadingAgentId && msgIdx === messages.map((m, i) => m.role === 'user' ? i : -1).filter(i => i >= 0).pop() && (
                   <div className="flex justify-end mt-1.5 animate-fade-in">
