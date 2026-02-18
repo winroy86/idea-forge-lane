@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+import { supabase, hasSupabaseConfig } from '@/integrations/supabase/client';
 import { DEFAULT_MODELS, getDefaultLlmSelection } from '@/lib/providerSelection';
 
 const FAMOUS_SUGGESTIONS = [

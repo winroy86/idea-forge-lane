@@ -63,7 +63,7 @@ export function getDefaultLlmSelection(input?: string | { provider: LLMProvider;
     };
   }
 
-  const preferredModel = input?.trim();
+  const preferredModel = typeof input === 'string' ? input?.trim() : undefined;
   const providers = getProviders().filter(p => p.isActive).sort((a, b) => rankProvider(b) - rankProvider(a));
   const selected = providers[0];
 
