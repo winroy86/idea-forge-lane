@@ -1,4 +1,4 @@
-import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, CodeBlockMeta, MeetingContext } from '@/types';
+import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, SummarizerSettings, CodeBlockMeta, MeetingContext } from '@/types';
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
@@ -767,10 +767,11 @@ export async function callSummarizer(
   action: SummarizerAction,
   messages: Message[],
   allAgents: Agent[],
+  /** Optional per-room summarizer override. Falls back to Lovable AI / first active provider. */
+  summarizerOverride?: SummarizerSettings,
 ): Promise<LLMResponse> {
   await waitForProviderHydration();
 
-  // Prefer Lovable AI for summarizer (no API key needed)
   const hasLovableCloud = !!import.meta.env.VITE_SUPABASE_URL;
   const providers = getProviders().filter(p => p.isActive);
 
@@ -797,12 +798,15 @@ export async function callSummarizer(
   let usedModel = '';
   let usedProvider = '';
 
-  // Try Lovable AI first
-  if (hasLovableCloud) {
+  // If an explicit override is set (room-level or global settings), use it
+  if (summarizerOverride && summarizerOverride.provider && summarizerOverride.model) {
+    const { provider: providerType, model, baseUrl: overrideBaseUrl } = summarizerOverride;
+
     const tempAgent = {
       config: {
-        provider: 'lovable' as const,
-        model: 'google/gemini-3-flash-preview',
+        provider: providerType,
+        model,
+        baseUrl: overrideBaseUrl,
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
@@ -810,9 +814,51 @@ export async function callSummarizer(
         frequencyPenalty: 0,
       },
     } as Agent;
-    const result = await callLovableAI('google/gemini-3-flash-preview', system, history, tempAgent);
+
+    if (providerType === 'lovable') {
+      const result = await callLovableAI(model, system, history, tempAgent);
+      content = result.content;
+    } else if (hasCloudBackendForProvider(providerType)) {
+      // Route through edge function (user keys stored server-side)
+      const baseUrl = overrideBaseUrl || getDefaultBaseUrl(providerType);
+      const result = await callViaEdgeFunction(providerType, model, system, history, tempAgent, undefined, undefined, baseUrl || undefined);
+      content = result.content;
+    } else {
+      const provider = findProvider(providerType, overrideBaseUrl);
+      if (providerType === 'anthropic') {
+        if (!provider?.apiKey) throw new Error('No Anthropic API key configured.');
+        const result = await callAnthropic(provider.apiKey, model, system, history, tempAgent);
+        content = result.content;
+      } else if (providerType === 'gemini') {
+        if (!provider?.apiKey) throw new Error('No Gemini API key configured.');
+        const result = await callGemini(provider.apiKey, model, system, history, tempAgent);
+        content = result.content;
+      } else {
+        const baseUrl = overrideBaseUrl || getDefaultBaseUrl(providerType) || '';
+        if (!baseUrl) throw new Error(`No base URL configured for provider "${providerType}".`);
+        const result = await callOpenAICompatible(provider?.apiKey || '', baseUrl, model, system, history, tempAgent);
+        content = result.content;
+      }
+    }
+    usedModel = model;
+    usedProvider = providerType;
+  } else if (hasLovableCloud) {
+    // Default: use Lovable AI
+    const defaultModel = 'google/gemini-3-flash-preview';
+    const tempAgent = {
+      config: {
+        provider: 'lovable' as const,
+        model: defaultModel,
+        temperature: 0.3,
+        topP: 1,
+        maxTokens: 2048,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+      },
+    } as Agent;
+    const result = await callLovableAI(defaultModel, system, history, tempAgent);
     content = result.content;
-    usedModel = 'google/gemini-3-flash-preview';
+    usedModel = defaultModel;
     usedProvider = 'lovable';
   } else {
     const selected = isBackendModeEnabled
@@ -866,4 +912,16 @@ export async function callSummarizer(
     model: usedModel,
     provider: usedProvider,
   };
+}
+
+function hasCloudBackendForProvider(provider: string): boolean {
+  return !!import.meta.env.VITE_SUPABASE_URL;
+}
+
+function getDefaultBaseUrl(provider: string): string {
+  switch (provider) {
+    case 'openai': return 'https://api.openai.com/v1';
+    case 'ollama': return 'http://localhost:11434/v1';
+    default: return '';
+  }
 }

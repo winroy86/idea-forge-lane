@@ -21,24 +21,57 @@ serve(async (req) => {
   }
 
   try {
-    const { personName, description } = await req.json();
+    const { personName, description, llm } = await req.json();
 
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    // Prefer OpenAI directly; fall back to Lovable gateway
-    const apiKey = OPENAI_API_KEY || LOVABLE_API_KEY || "";
-    const chatCompletionsUrl = OPENAI_API_KEY
-      ? "https://api.openai.com/v1/chat/completions"
-      : (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "") + "/chat/completions";
+    // Honor the client-provided llm settings (from Settings page / global config)
+    // llm = { provider, model, apiKey?, baseUrl? }
+    let apiKey: string;
+    let chatCompletionsUrl: string;
+    let modelsToTry: string[];
+
+    if (llm?.provider && llm.provider !== 'lovable' && llm?.model) {
+      // Use the user-configured provider from settings
+      const providerType: string = llm.provider;
+      const userModel: string = llm.model;
+
+      if (providerType === 'openai') {
+        const key = llm.apiKey || OPENAI_API_KEY || "";
+        apiKey = key;
+        chatCompletionsUrl = (llm.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "") + "/chat/completions";
+        modelsToTry = [userModel];
+      } else if (providerType === 'anthropic') {
+        // Anthropic doesn't support OpenAI-compat tool_choice via this path; fall through to Lovable gateway
+        apiKey = LOVABLE_API_KEY || "";
+        chatCompletionsUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "") + "/chat/completions";
+        modelsToTry = ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "openai/gpt-5-mini"];
+      } else if (providerType === 'gemini') {
+        // Gemini via Lovable gateway (OpenAI-compat)
+        apiKey = LOVABLE_API_KEY || "";
+        chatCompletionsUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "") + "/chat/completions";
+        modelsToTry = [userModel.startsWith("google/") ? userModel : `google/${userModel}`, "google/gemini-2.5-flash"];
+      } else {
+        // ollama / azure / custom — use provided baseUrl
+        apiKey = llm.apiKey || "";
+        chatCompletionsUrl = (llm.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "") + "/chat/completions";
+        modelsToTry = [userModel];
+      }
+    } else {
+      // Default: prefer OpenAI directly; fall back to Lovable gateway
+      apiKey = OPENAI_API_KEY || LOVABLE_API_KEY || "";
+      chatCompletionsUrl = OPENAI_API_KEY
+        ? "https://api.openai.com/v1/chat/completions"
+        : (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "") + "/chat/completions";
+      modelsToTry = OPENAI_API_KEY
+        ? ["gpt-4o-mini", "gpt-4o"]
+        : ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "openai/gpt-5-mini"];
+    }
 
     if (!apiKey) {
       throw new Error("No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)");
     }
-
-    const modelsToTry = OPENAI_API_KEY
-      ? ["gpt-4o-mini", "gpt-4o"]
-      : ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "openai/gpt-5-mini"];
 
     const isCustom = !personName && description;
 
