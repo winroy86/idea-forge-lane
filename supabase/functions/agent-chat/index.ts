@@ -667,11 +667,8 @@ serve(async (req) => {
         if (fnName === "web_search") {
           const query = args.query || "";
           console.log(`🔍 Agent searching: "${query}"`);
- <<<<<<< codex/refactor-tool-orchestration-architecture
-          const searchResult = await performWebSearch(query, providerApiKey);
           const searchModel = typeof model === "string" && model ? model : "google/gemini-3-flash-preview";
           const searchResult = await performWebSearch(query, LOVABLE_API_KEY, searchModel);
- >>>>>>> main
           toolCallsMade.push({ tool: "web_search", query, result: searchResult.result, sources: searchResult.sources });
           toolResult = searchResult.result;
         } else if (fnName === "code_execution") {
