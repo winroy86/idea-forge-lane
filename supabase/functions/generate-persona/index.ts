@@ -6,36 +6,14 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-type OpenAICompatibleProvider = "openai" | "azure" | "custom" | "ollama";
 
-function isLocalOpenAICompatibleUrl(url: string): boolean {
-  return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
-}
-
-function normalizeProvider(provider: string): OpenAICompatibleProvider {
-  if (provider === "azure" || provider === "custom" || provider === "ollama") return provider;
-  return "openai";
-}
-
-function providerRequiresApiKey(provider: OpenAICompatibleProvider, baseUrl: string): boolean {
-  // Ollama commonly runs locally without auth; keep keyless usage supported.
-  if (provider === "ollama") return false;
-
-  if (provider === "custom") {
-    const allowKeylessCustom = Deno.env.get("ALLOW_KEYLESS_CUSTOM_OPENAI") === "true";
-    return !(allowKeylessCustom || isLocalOpenAICompatibleUrl(baseUrl));
-  }
-
-  // OpenAI/Azure should remain strict about API key presence.
-  return true;
-}
-
-function buildOpenAICompatibleHeaders(apiKey?: string): Record<string, string> {
+function buildHeaders(apiKey: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    Authorization: `Bearer ${apiKey}`,
   };
 }
+
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -45,17 +23,25 @@ serve(async (req) => {
   try {
     const { personName, description } = await req.json();
 
-    const provider = normalizeProvider((Deno.env.get("OPENAI_COMPAT_PROVIDER") || Deno.env.get("AI_PROVIDER") || "openai").toLowerCase());
-    const openAICompatBaseUrl = (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "");
-    const chatCompletionsUrl = `${openAICompatBaseUrl}/chat/completions`;
-    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY") || "";
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (providerRequiresApiKey(provider, openAICompatBaseUrl) && !apiKey) {
-      throw new Error("API key is required for the configured AI provider");
+    // Prefer OpenAI directly; fall back to Lovable gateway
+    const apiKey = OPENAI_API_KEY || LOVABLE_API_KEY || "";
+    const chatCompletionsUrl = OPENAI_API_KEY
+      ? "https://api.openai.com/v1/chat/completions"
+      : (Deno.env.get("OPENAI_COMPAT_BASE_URL") || "https://ai.gateway.lovable.dev/v1").replace(/\/$/, "") + "/chat/completions";
+
+    if (!apiKey) {
+      throw new Error("No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)");
     }
 
+    const modelsToTry = OPENAI_API_KEY
+      ? ["gpt-4o-mini", "gpt-4o"]
+      : ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "openai/gpt-5-mini"];
+
     const isCustom = !personName && description;
-    
+
     const systemPrompt = `You are an expert persona architect. Your job is to create rich, detailed AI agent personas.
 
 You MUST respond with a JSON object using this EXACT tool call. No other text.`;
@@ -73,12 +59,6 @@ Analyze their:
 - Their typical emotional tone and energy
 
 Create a persona that would make someone feel like they're actually talking to this person.`;
-
-    const modelsToTry = [
-      "google/gemini-2.5-flash",
-      "google/gemini-2.5-flash-lite",
-      "openai/gpt-5-mini",
-    ];
 
     const requestBody = {
       messages: [
@@ -119,7 +99,7 @@ Create a persona that would make someone feel like they're actually talking to t
       console.log(`Trying model: ${model}`);
       const response = await fetch(chatCompletionsUrl, {
         method: "POST",
-        headers: buildOpenAICompatibleHeaders(apiKey),
+        headers: buildHeaders(apiKey),
         body: JSON.stringify({ ...requestBody, model }),
       });
 
@@ -140,7 +120,7 @@ Create a persona that would make someone feel like they're actually talking to t
         const { tools: _t, tool_choice: _tc, ...bodyWithoutTools } = requestBody;
         const retryRes = await fetch(chatCompletionsUrl, {
           method: "POST",
-          headers: buildOpenAICompatibleHeaders(apiKey),
+          headers: buildHeaders(apiKey),
           body: JSON.stringify({ ...bodyWithoutTools, model }),
         });
         if (retryRes.ok) {

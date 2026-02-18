@@ -190,17 +190,24 @@ async function performWebSearch(query: string, apiKey: string, synthesisModel: s
     ({ snippets, sources } = await searchWikipedia(query));
   }
 
+  // Resolve API key and endpoint for synthesis
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  const synthApiKey = OPENAI_API_KEY || apiKey;
+  const synthEndpoint = OPENAI_API_KEY
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://ai.gateway.lovable.dev/v1/chat/completions";
+  const synthModel = OPENAI_API_KEY ? "gpt-4o-mini" : synthesisModel;
+
   // If both fail, use the LLM's own knowledge but be honest about it
   if (snippets.length === 0) {
-    // Use LLM knowledge but clearly state it's from training data
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const res = await fetch(synthEndpoint, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${synthApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: synthesisModel,
+        model: synthModel,
         messages: [
           {
             role: "system",
@@ -226,14 +233,14 @@ async function performWebSearch(query: string, apiKey: string, synthesisModel: s
   // Synthesize with LLM
   const searchContext = snippets.join("\n\n");
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch(synthEndpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${synthApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: synthesisModel,
+      model: synthModel,
       messages: [
         {
           role: "system",
@@ -442,8 +449,8 @@ function isOpenAICompatibleProvider(provider: string): boolean {
   return provider === 'lovable' || provider === 'openai' || provider === 'azure' || provider === 'ollama' || provider === 'custom';
 }
 
-function resolveOpenAICompatibleBaseUrl(provider: string, baseUrl?: string): string {
-  if (provider === 'lovable') return 'https://ai.gateway.lovable.dev/v1';
+function resolveOpenAICompatibleBaseUrl(provider: string, baseUrl?: string, hasOpenAIKey?: boolean): string {
+  if (provider === 'lovable') return hasOpenAIKey ? 'https://api.openai.com/v1' : 'https://ai.gateway.lovable.dev/v1';
   if (provider === 'openai') return 'https://api.openai.com/v1';
   if (provider === 'ollama') return baseUrl || 'http://localhost:11434/v1';
   if (provider === 'azure') return baseUrl || 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT';
@@ -480,10 +487,14 @@ serve(async (req) => {
   try {
     const { provider = 'lovable', api_key, base_url, messages, model, temperature, max_tokens, top_p, presence_penalty, frequency_penalty, tools_enabled, mcp_servers } = await req.json();
 
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    const providerApiKey = provider === 'lovable' ? LOVABLE_API_KEY : api_key;
+    // Prefer OPENAI_API_KEY for lovable provider; fall back to LOVABLE_API_KEY
+    const providerApiKey = provider === 'lovable'
+      ? (OPENAI_API_KEY || LOVABLE_API_KEY)
+      : api_key;
     if (!providerApiKey) {
-      throw new Error(provider === 'lovable' ? 'LOVABLE_API_KEY is not configured' : `Missing API key for provider: ${provider}`);
+      throw new Error(provider === 'lovable' ? 'No API key configured (OPENAI_API_KEY or LOVABLE_API_KEY required)' : `Missing API key for provider: ${provider}`);
     }
 
     // Populate MCP auth configs from incoming server data
@@ -529,8 +540,14 @@ serve(async (req) => {
       }
     }
 
+    const OPENAI_API_KEY_ENV = Deno.env.get("OPENAI_API_KEY");
+    // When provider is 'lovable' and OPENAI_API_KEY is set, use gpt-4o-mini as default
+    const resolvedModel = (provider === 'lovable' && OPENAI_API_KEY_ENV && !model)
+      ? "gpt-4o-mini"
+      : (model || (provider === 'lovable' ? "google/gemini-3-flash-preview" : "gpt-4o-mini"));
+
     const body: Record<string, unknown> = {
-      model: model || "google/gemini-3-flash-preview",
+      model: resolvedModel,
       messages,
       temperature: temperature ?? 0.7,
       max_tokens: max_tokens ?? 2048,
@@ -544,7 +561,7 @@ serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url);
+    const targetBaseUrl = resolveOpenAICompatibleBaseUrl(provider, base_url, !!OPENAI_API_KEY_ENV);
     if (isOpenAICompatibleProvider(provider) && !targetBaseUrl) {
       throw new Error(`No base URL configured for provider: ${provider}`);
     }
