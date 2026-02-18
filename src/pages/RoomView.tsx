@@ -1250,7 +1250,26 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     : 'Thinking…')
                   : 'Speak now'}
               </button>
-              <div className="mt-1.5 flex items-center gap-1.5">
+              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                {/* Provider/model badge */}
+                <span className={`inline-flex items-center gap-0.5 text-[9px] font-medium rounded px-1.5 py-0.5 ${
+                  agent.config.provider === 'lovable' ? 'bg-accent/15 text-accent' :
+                  agent.config.provider === 'openai' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                  agent.config.provider === 'anthropic' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' :
+                  agent.config.provider === 'gemini' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                  agent.config.provider === 'ollama' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' :
+                  'bg-muted text-muted-foreground'
+                }`}>
+                  {agent.config.provider === 'lovable' ? '⚡' :
+                   agent.config.provider === 'openai' ? '🟢' :
+                   agent.config.provider === 'anthropic' ? '🟠' :
+                   agent.config.provider === 'gemini' ? '🔵' :
+                   agent.config.provider === 'ollama' ? '🟣' : '⚙️'}
+                  {' '}
+                  <span className="max-w-[80px] truncate" title={agent.config.model}>
+                    {agent.config.model?.split('/').pop() || agent.config.provider}
+                  </span>
+                </span>
                 {agent.memoryEnabled && (agent.researchLoops || 0) > 0 && (
                   <span className="text-[9px] text-accent bg-accent/10 rounded px-1.5 py-0.5">
                     🔄 {agent.researchLoops} loops
