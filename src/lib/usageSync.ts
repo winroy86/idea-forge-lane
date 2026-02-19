@@ -39,6 +39,30 @@ export async function syncRoom(room: Room): Promise<void> {
   }
 }
 
+/** Upsert a meeting snapshot — call after starting a meeting. */
+export async function syncMeeting(meeting: import('@/types').MeetingSession): Promise<void> {
+  try {
+    const userId = await getAuthUserId();
+    if (!userId) return;
+
+    await db().from('meeting_snapshots').upsert(
+      {
+        user_id: userId,
+        room_id: meeting.roomId,
+        meeting_id: meeting.id,
+        topic: meeting.topic ?? '',
+        goals: meeting.goals ?? '',
+        duration_minutes: meeting.durationMinutes ?? 0,
+        status: meeting.status ?? 'active',
+        started_at: meeting.startTime ?? new Date().toISOString(),
+      },
+      { onConflict: 'user_id,meeting_id' }
+    );
+  } catch {
+    // Silently ignore — never affect the UI
+  }
+}
+
 /** Upsert an agent snapshot — call after saving an agent. */
 export async function syncAgent(agent: Agent): Promise<void> {
   try {
