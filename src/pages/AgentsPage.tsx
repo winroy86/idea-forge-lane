@@ -951,7 +951,7 @@ export default function AgentsPage() {
   useEffect(refresh, []);
 
   useEffect(() => {
-    fetchModelPolicy().then(setModelPolicy).catch(() => {});
+    fetchModelPolicy(true).then(setModelPolicy).catch(() => {});
   }, []);
 
   const handleSave = (agent: Agent) => {

@@ -187,7 +187,7 @@ export default function RoomView() {
   const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([]);
 
   useEffect(() => {
-    fetchModelPolicy().then(setModelPolicy).catch(() => {});
+    fetchModelPolicy(true).then(setModelPolicy).catch(() => {});
   }, []);
 
   // Meeting state
