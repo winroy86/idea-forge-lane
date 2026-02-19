@@ -6,6 +6,7 @@ import { waitForProviderHydration } from '@/lib/providerHydration';
 import { getAgentMemories } from '@/lib/agentMemory';
 import { detectOllamaModels, OllamaModel } from '@/lib/ollama';
 import { getSkills } from '@/lib/skillStore';
+import { syncAgent } from '@/lib/usageSync';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -912,6 +913,7 @@ export default function AgentsPage() {
     upsertAgent(agent);
     setEditAgent(undefined);
     refresh();
+    syncAgent(agent);
   };
 
   const handleDelete = (id: string) => {

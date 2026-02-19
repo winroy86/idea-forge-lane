@@ -14,6 +14,84 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_snapshots: {
+        Row: {
+          agent_id: string
+          created_at: string
+          domain: string
+          id: string
+          model: string
+          name: string
+          provider: string
+          role: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_id: string
+          created_at?: string
+          domain?: string
+          id?: string
+          model?: string
+          name?: string
+          provider?: string
+          role?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_id?: string
+          created_at?: string
+          domain?: string
+          id?: string
+          model?: string
+          name?: string
+          provider?: string
+          role?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      room_snapshots: {
+        Row: {
+          agent_count: number
+          created_at: string
+          goal: string
+          id: string
+          last_opened_at: string
+          orchestration: string
+          room_id: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_count?: number
+          created_at?: string
+          goal?: string
+          id?: string
+          last_opened_at?: string
+          orchestration?: string
+          room_id: string
+          title?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_count?: number
+          created_at?: string
+          goal?: string
+          id?: string
+          last_opened_at?: string
+          orchestration?: string
+          room_id?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_provider_credentials: {
         Row: {
           api_key: string | null
