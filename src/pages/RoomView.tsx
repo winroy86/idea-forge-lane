@@ -52,7 +52,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import { syncRoom, syncMeeting } from '@/lib/usageSync';
+import { syncRoom, syncMeeting, syncAgent } from '@/lib/usageSync';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -201,8 +201,12 @@ export default function RoomView() {
     if (!r.documents) r.documents = [];
     if (!r.meetings) r.meetings = [];
     setRoom(r);
-    setAllAgents(getAgents());
+    const roomAgents = getAgents();
+    setAllAgents(roomAgents);
     setMessages(getMessages(id));
+    // Sync agents with their room context (fire-and-forget)
+    const roomAgentIds = new Set(r.agentIds ?? []);
+    roomAgents.filter(a => roomAgentIds.has(a.id)).forEach(a => syncAgent(a, id));
     // Restore active meeting
     const active = getActiveMeeting(id);
     if (active && (active.status === 'active' || active.status === 'wrap-up')) {

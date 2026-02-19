@@ -64,7 +64,7 @@ export async function syncMeeting(meeting: import('@/types').MeetingSession): Pr
 }
 
 /** Upsert an agent snapshot — call after saving an agent. */
-export async function syncAgent(agent: Agent): Promise<void> {
+export async function syncAgent(agent: Agent, roomId?: string): Promise<void> {
   try {
     const userId = await getAuthUserId();
     if (!userId) return;
@@ -78,6 +78,7 @@ export async function syncAgent(agent: Agent): Promise<void> {
         domain: agent.domain ?? '',
         provider: agent.config?.provider ?? '',
         model: agent.config?.model ?? '',
+        ...(roomId ? { room_id: roomId } : {}),
       },
       { onConflict: 'user_id,agent_id' }
     );
