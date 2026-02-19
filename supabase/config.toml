@@ -14,3 +14,9 @@ verify_jwt = false
 
 [functions.mcp-test-server]
 verify_jwt = false
+
+[functions.model-policy]
+verify_jwt = false
+
+[functions.admin-users]
+verify_jwt = false

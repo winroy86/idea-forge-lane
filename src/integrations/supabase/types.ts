@@ -56,6 +56,36 @@ export type Database = {
         }
         Relationships: []
       }
+      allowed_models: {
+        Row: {
+          created_at: string
+          id: string
+          is_allowed: boolean
+          label: string
+          model_id: string
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_allowed?: boolean
+          label?: string
+          model_id: string
+          provider: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_allowed?: boolean
+          label?: string
+          model_id?: string
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       meeting_snapshots: {
         Row: {
           created_at: string
