@@ -519,16 +519,35 @@ serve(async (req) => {
             const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
             const { data: creds } = await admin
               .from("user_provider_credentials")
-              .select("api_key, base_url")
+              .select("api_key, api_key_encrypted, api_key_iv, api_key_tag, key_version, encryption_algorithm, base_url")
               .eq("user_id", userId)
               .eq("provider", provider)
               .eq("is_active", true)
               .order("updated_at", { ascending: false })
               .limit(1)
               .maybeSingle();
-            if (creds?.api_key) resolvedApiKey = creds.api_key;
-            // Also use stored base_url if not passed explicitly
-            if (!resolvedBaseUrl && creds?.base_url) resolvedBaseUrl = creds.base_url;
+            if (creds) {
+              // Prefer encrypted key; fall back to legacy plain-text
+              if (creds.api_key_encrypted && creds.api_key_iv && creds.api_key_tag && creds.key_version) {
+                try {
+                  const { loadProviderKeyringFromEnv, decryptProviderSecret } = await import("../_shared/provider-secrets.ts");
+                  const keyring = loadProviderKeyringFromEnv(Deno.env.toObject());
+                  resolvedApiKey = await decryptProviderSecret({
+                    ciphertext: creds.api_key_encrypted,
+                    iv: creds.api_key_iv,
+                    tag: creds.api_key_tag,
+                    keyVersion: creds.key_version,
+                    algorithm: creds.encryption_algorithm || "AES-256-GCM",
+                  }, keyring);
+                } catch (decryptErr) {
+                  console.warn("Failed to decrypt provider key:", decryptErr);
+                }
+              } else if (creds.api_key) {
+                // Legacy plain-text (will be encrypted on next save)
+                resolvedApiKey = creds.api_key;
+              }
+              if (!resolvedBaseUrl && creds?.base_url) resolvedBaseUrl = creds.base_url;
+            }
             console.log(`User ${userId} credentials resolved for provider "${provider}": key=${resolvedApiKey ? 'found' : 'not found'}`);
           }
         } catch (e) {
