@@ -31,6 +31,8 @@ import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import { supabase, hasSupabaseConfig } from '@/integrations/supabase/client';
 import { DEFAULT_MODELS, getDefaultLlmSelection } from '@/lib/providerSelection';
+import { fetchModelPolicy, filterModelsByPolicy, AllowedModel } from '@/lib/modelPolicy';
+import { useAdminRole } from '@/lib/useAdminRole';
 
 const FAMOUS_SUGGESTIONS = [
   'Elon Musk', 'Steve Jobs', 'Albert Einstein', 'Nikola Tesla',
@@ -123,7 +125,7 @@ function getConfiguredProviderOptions() {
   ];
 }
 
-function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: (a: Agent) => void; onClose: () => void }) {
+function AgentEditor({ agent, onSave, onClose, policy, isAdmin }: { agent: Agent | null; onSave: (a: Agent) => void; onClose: () => void; policy: AllowedModel[]; isAdmin: boolean }) {
   const [form, setForm] = useState<Agent>(
     agent || {
       id: generateId(),
@@ -154,9 +156,16 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
   const [mcpAuthToken, setMcpAuthToken] = useState('');
   const [mcpAuthHeader, setMcpAuthHeader] = useState('');
   const [configuredProviders, setConfiguredProviders] = useState(() => getConfiguredProviderOptions());
+
+  // Filter preset models by policy (admins bypass)
+  const getFilteredPresetModels = (provider: string, models: { value: string; label: string }[]) => {
+    if (isAdmin) return models;
+    return filterModelsByPolicy(models, provider, policy);
+  };
+
   // Preset models for the selected provider (null = use text input)
   const presetModels = form.config.provider !== 'lovable' && form.config.provider !== 'ollama'
-    ? (PROVIDER_PRESET_MODELS[form.config.provider] ?? null)
+    ? getFilteredPresetModels(form.config.provider, PROVIDER_PRESET_MODELS[form.config.provider] ?? null)
     : null;
 
   useEffect(() => {
@@ -274,7 +283,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
                 <Select value={form.config.model} onValueChange={v => updateConfig({ model: v })}>
                   <SelectTrigger><SelectValue placeholder="Select a model" /></SelectTrigger>
                   <SelectContent>
-                    {LOVABLE_MODELS.map(m => (
+                    {getFilteredPresetModels('lovable', LOVABLE_MODELS).map(m => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -908,10 +917,16 @@ export default function AgentsPage() {
   const [editAgent, setEditAgent] = useState<Agent | null | undefined>(undefined);
   const [showGenerator, setShowGenerator] = useState(false);
   const [memoryPanelAgent, setMemoryPanelAgent] = useState<Agent | null>(null);
+  const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([]);
+  const { isAdmin } = useAdminRole();
   const { toast } = useToast();
 
   const refresh = () => setAgents(getAgents());
   useEffect(refresh, []);
+
+  useEffect(() => {
+    fetchModelPolicy().then(setModelPolicy).catch(() => {});
+  }, []);
 
   const handleSave = (agent: Agent) => {
     upsertAgent(agent);
@@ -1063,7 +1078,7 @@ export default function AgentsPage() {
 
       <Dialog open={editAgent !== undefined} onOpenChange={(open) => !open && setEditAgent(undefined)}>
         {editAgent !== undefined && (
-          <AgentEditor agent={editAgent} onSave={handleSave} onClose={() => setEditAgent(undefined)} />
+          <AgentEditor agent={editAgent} onSave={handleSave} onClose={() => setEditAgent(undefined)} policy={modelPolicy} isAdmin={isAdmin} />
         )}
       </Dialog>
 

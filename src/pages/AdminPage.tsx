@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShieldCheck, Users, MessageSquare, Calendar, Filter, RefreshCw,
-  ChevronDown, ChevronRight, Clock, Target, Zap, UserCog, Shield, User,
+  ChevronDown, ChevronRight, Clock, Target, Zap, UserCog, Shield, User, Lock, Check, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -10,6 +10,7 @@ import { useAdminRole } from '@/lib/useAdminRole';
 import { supabase } from '@/integrations/supabase/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { useToast } from '@/hooks/use-toast';
+import { AllowedModel, fetchModelPolicy, resetModelPolicyCache } from '@/lib/modelPolicy';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabase as unknown as SupabaseClient<any>;
@@ -255,7 +256,12 @@ export default function AdminPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [roleUpdating, setRoleUpdating] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<'rooms' | 'agents' | 'users'>('rooms');
+  const [activeTab, setActiveTab] = useState<'rooms' | 'agents' | 'users' | 'models'>('rooms');
+
+  // Model policy state
+  const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([]);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policyUpdating, setPolicyUpdating] = useState<string | null>(null);
 
   // Redirect non-admins
   useEffect(() => {
@@ -329,9 +335,60 @@ export default function AdminPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  // Fetch model policy
+  const fetchPolicy = useCallback(async () => {
+    setPolicyLoading(true);
+    try {
+      resetModelPolicyCache();
+      const models = await fetchModelPolicy(true);
+      setModelPolicy(models);
+    } catch (e) {
+      toast({ title: 'Error loading model policy', description: String(e), variant: 'destructive' });
+    } finally {
+      setPolicyLoading(false);
+    }
+  }, [toast]);
+
+  const toggleModel = async (provider: string, modelId: string, label: string, currentlyAllowed: boolean) => {
+    const key = `${provider}::${modelId}`;
+    setPolicyUpdating(key);
+    try {
+      const authHeader = await getAuthHeader();
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (currentlyAllowed) {
+        // Remove from policy (no entry = no restriction if no other entries exist, but we DELETE to clean up)
+        await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
+          method: 'DELETE',
+          headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model_id: modelId }),
+        });
+        setModelPolicy(prev => prev.filter(m => !(m.provider === provider && m.model_id === modelId)));
+      } else {
+        // Add to policy as allowed
+        const res = await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
+          method: 'POST',
+          headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model_id: modelId, label, is_allowed: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? 'Failed');
+        setModelPolicy(prev => [...prev.filter(m => !(m.provider === provider && m.model_id === modelId)), data.model]);
+      }
+      resetModelPolicyCache();
+    } catch (e) {
+      toast({ title: 'Error updating model policy', description: String(e), variant: 'destructive' });
+    } finally {
+      setPolicyUpdating(null);
+    }
+  };
+
   useEffect(() => {
     if (isAdmin && activeTab === 'users') fetchUsers();
   }, [isAdmin, activeTab, fetchUsers]);
+
+  useEffect(() => {
+    if (isAdmin && activeTab === 'models') fetchPolicy();
+  }, [isAdmin, activeTab, fetchPolicy]);
 
   if (roleLoading) {
     return (
@@ -425,10 +482,21 @@ export default function AdminPage() {
             <UserCog className="h-3.5 w-3.5" />
             Users
           </button>
+          <button
+            onClick={() => setActiveTab('models')}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === 'models'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <Lock className="h-3.5 w-3.5" />
+            Model Policy
+          </button>
         </div>
 
         {/* Filter — only for rooms/agents tabs */}
-        {activeTab !== 'users' && (
+        {(activeTab === 'rooms' || activeTab === 'agents') && (
           <div className="flex items-center gap-2 ml-auto">
             <Filter className="h-3.5 w-3.5 text-muted-foreground" />
             <Select value={selectedUser} onValueChange={setSelectedUser}>
@@ -449,7 +517,7 @@ export default function AdminPage() {
       </div>
 
       {/* Loading */}
-      {loading && activeTab !== 'users' ? (
+      {loading && (activeTab === 'rooms' || activeTab === 'agents') ? (
         <div className="flex items-center justify-center py-20">
           <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
@@ -540,7 +608,7 @@ export default function AdminPage() {
             </div>
           </div>
         )
-      ) : (
+      ) : activeTab === 'users' ? (
         /* Users Tab */
         usersLoading ? (
           <div className="flex items-center justify-center py-20">
@@ -621,7 +689,176 @@ export default function AdminPage() {
             </div>
           </>
         )
-      )}
+      ) : activeTab === 'models' ? (
+        /* Model Policy Tab */
+        policyLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <ModelPolicyPanel
+            policy={modelPolicy}
+            policyUpdating={policyUpdating}
+            onToggle={toggleModel}
+            onRefresh={fetchPolicy}
+          />
+        )
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Model Policy Panel ────────────────────────────────────────────────────
+
+const POLICY_PROVIDERS: { provider: string; label: string; models: { value: string; label: string }[] }[] = [
+  {
+    provider: 'lovable',
+    label: '⚡ Lovable AI',
+    models: [
+      { value: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash (Fast)' },
+      { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro (Powerful)' },
+      { value: 'google/gemini-3-pro-preview', label: 'Gemini 3 Pro' },
+      { value: 'openai/gpt-5-nano', label: 'GPT-5 Nano (Fast)' },
+      { value: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
+      { value: 'openai/gpt-5', label: 'GPT-5 (Powerful)' },
+    ],
+  },
+  {
+    provider: 'openai',
+    label: 'OpenAI',
+    models: [
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
+      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+      { value: 'gpt-4', label: 'GPT-4' },
+      { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+      { value: 'o1', label: 'o1 (Reasoning)' },
+      { value: 'o1-mini', label: 'o1 Mini' },
+      { value: 'o3-mini', label: 'o3 Mini' },
+    ],
+  },
+  {
+    provider: 'anthropic',
+    label: 'Anthropic',
+    models: [
+      { value: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
+      { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+      { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (Fast)' },
+      { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+      { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+      { value: 'claude-haiku-3-20240307', label: 'Claude Haiku 3 (Fast)' },
+    ],
+  },
+  {
+    provider: 'gemini',
+    label: 'Google Gemini',
+    models: [
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+      { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    ],
+  },
+  {
+    provider: 'azure',
+    label: 'Azure OpenAI',
+    models: [
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+      { value: 'gpt-4', label: 'GPT-4' },
+      { value: 'gpt-35-turbo', label: 'GPT-3.5 Turbo' },
+    ],
+  },
+];
+
+function ModelPolicyPanel({
+  policy,
+  policyUpdating,
+  onToggle,
+  onRefresh,
+}: {
+  policy: AllowedModel[];
+  policyUpdating: string | null;
+  onToggle: (provider: string, modelId: string, label: string, currentlyAllowed: boolean) => void;
+  onRefresh: () => void;
+}) {
+  const isAllowed = (provider: string, modelId: string) =>
+    policy.some(p => p.provider === provider && p.model_id === modelId && p.is_allowed);
+
+  const providerHasAnyPolicy = (provider: string) =>
+    policy.some(p => p.provider === provider);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+        <strong>How this works:</strong> By default (no models checked), all models are available to users.
+        Once you check at least one model for a provider, only those checked models will be available to normal users for that provider.
+        Admins always see all models.
+      </div>
+
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={onRefresh} className="gap-1.5">
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </Button>
+      </div>
+
+      <div className="space-y-4">
+        {POLICY_PROVIDERS.map(({ provider, label, models }) => {
+          const hasPolicy = providerHasAnyPolicy(provider);
+          return (
+            <div key={provider} className="rounded-lg border border-border bg-card overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm text-foreground">{label}</span>
+                  <span className="font-mono text-[10px] bg-muted rounded px-1.5 py-0.5 text-muted-foreground">{provider}</span>
+                </div>
+                {hasPolicy ? (
+                  <span className="text-[10px] font-medium text-primary flex items-center gap-1">
+                    <Lock className="h-3 w-3" /> Restricted
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground">Open (no restrictions)</span>
+                )}
+              </div>
+              <div className="divide-y divide-border">
+                {models.map(model => {
+                  const allowed = isAllowed(provider, model.value);
+                  const key = `${provider}::${model.value}`;
+                  const updating = policyUpdating === key;
+                  return (
+                    <div key={model.value} className="flex items-center justify-between px-4 py-2.5">
+                      <div>
+                        <span className="text-sm text-foreground">{model.label}</span>
+                        <span className="ml-2 font-mono text-[10px] text-muted-foreground">{model.value}</span>
+                      </div>
+                      <button
+                        onClick={() => onToggle(provider, model.value, model.label, allowed)}
+                        disabled={updating}
+                        className={`flex items-center gap-1.5 text-xs font-medium rounded-full px-2.5 py-1 transition-colors ${
+                          allowed
+                            ? 'bg-primary/15 text-primary hover:bg-primary/25'
+                            : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                        }`}
+                      >
+                        {updating ? (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        ) : allowed ? (
+                          <Check className="h-3 w-3" />
+                        ) : (
+                          <X className="h-3 w-3" />
+                        )}
+                        {allowed ? 'Allowed' : 'Blocked'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
