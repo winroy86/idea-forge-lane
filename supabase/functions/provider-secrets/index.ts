@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { loadProviderKeyringFromEnv, encryptProviderSecret, decryptProviderSecret, type ProviderSecretEnvelope } from "../_shared/provider-secrets.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -52,17 +53,36 @@ serve(async (req) => {
         return new Response(JSON.stringify({ provider: { provider: 'lovable', label: body.label || 'Lovable AI' } }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
+      const keyring = loadProviderKeyringFromEnv(Deno.env.toObject());
+
       let apiKey = body.apiKey;
       if (!apiKey || apiKey === "unchanged") {
+        // Fetch the existing encrypted key and decrypt it so we can re-encrypt under the current key
         const { data: existing } = await admin
           .from("user_provider_credentials")
-          .select("api_key")
+          .select("api_key_encrypted, api_key_iv, api_key_tag, key_version, encryption_algorithm, api_key")
           .eq("id", body.id)
           .eq("user_id", userId)
           .maybeSingle();
-        apiKey = existing?.api_key;
+        if (existing?.api_key_encrypted && existing?.api_key_iv && existing?.api_key_tag && existing?.key_version) {
+          // Already encrypted — keep as-is (will re-encrypt below with same plaintext)
+          const envelope: ProviderSecretEnvelope = {
+            ciphertext: existing.api_key_encrypted,
+            iv: existing.api_key_iv,
+            tag: existing.api_key_tag,
+            keyVersion: existing.key_version,
+            algorithm: existing.encryption_algorithm || "AES-256-GCM",
+          };
+          apiKey = await decryptProviderSecret(envelope, keyring);
+        } else if (existing?.api_key) {
+          // Legacy plain-text row — migrate it
+          apiKey = existing.api_key;
+        }
       }
       if (!apiKey) throw new Error("apiKey is required for this provider");
+
+      // Encrypt the API key before storing
+      const envelope = await encryptProviderSecret(apiKey, keyring);
 
       const payload = {
         id: body.id,
@@ -70,7 +90,13 @@ serve(async (req) => {
         provider: body.provider,
         label: body.label,
         base_url: body.baseUrl ?? null,
-        api_key: apiKey,
+        // Store encrypted fields; clear plain-text column
+        api_key: null,
+        api_key_encrypted: envelope.ciphertext,
+        api_key_iv: envelope.iv,
+        api_key_tag: envelope.tag,
+        key_version: envelope.keyVersion,
+        encryption_algorithm: envelope.algorithm,
         is_active: body.isActive ?? true,
       };
       const { data, error } = await admin
