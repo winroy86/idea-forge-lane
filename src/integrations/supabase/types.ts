@@ -140,10 +140,15 @@ export type Database = {
       user_provider_credentials: {
         Row: {
           api_key: string | null
+          api_key_encrypted: string | null
+          api_key_iv: string | null
+          api_key_tag: string | null
           base_url: string | null
           created_at: string
+          encryption_algorithm: string | null
           id: string
           is_active: boolean
+          key_version: string | null
           label: string
           provider: string
           updated_at: string
@@ -151,10 +156,15 @@ export type Database = {
         }
         Insert: {
           api_key?: string | null
+          api_key_encrypted?: string | null
+          api_key_iv?: string | null
+          api_key_tag?: string | null
           base_url?: string | null
           created_at?: string
+          encryption_algorithm?: string | null
           id?: string
           is_active?: boolean
+          key_version?: string | null
           label?: string
           provider: string
           updated_at?: string
@@ -162,10 +172,15 @@ export type Database = {
         }
         Update: {
           api_key?: string | null
+          api_key_encrypted?: string | null
+          api_key_iv?: string | null
+          api_key_tag?: string | null
           base_url?: string | null
           created_at?: string
+          encryption_algorithm?: string | null
           id?: string
           is_active?: boolean
+          key_version?: string | null
           label?: string
           provider?: string
           updated_at?: string
