@@ -24,6 +24,7 @@ export type Database = {
           name: string
           provider: string
           role: string
+          room_id: string
           updated_at: string
           user_id: string
         }
@@ -36,6 +37,7 @@ export type Database = {
           name?: string
           provider?: string
           role?: string
+          room_id?: string
           updated_at?: string
           user_id: string
         }
@@ -48,6 +50,7 @@ export type Database = {
           name?: string
           provider?: string
           role?: string
+          room_id?: string
           updated_at?: string
           user_id?: string
         }

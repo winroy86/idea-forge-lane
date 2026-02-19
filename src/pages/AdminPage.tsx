@@ -48,6 +48,7 @@ interface AgentRow {
   domain: string;
   provider: string;
   model: string;
+  room_id: string;
   created_at: string;
 }
 
@@ -95,15 +96,17 @@ function RoleBadge({ role }: { role: 'admin' | 'user' }) {
   );
 }
 
-function RoomRowItem({ room, meetings }: { room: RoomRow; meetings: MeetingRow[] }) {
+function RoomRowItem({ room, meetings, agents }: { room: RoomRow; meetings: MeetingRow[]; agents: AgentRow[] }) {
   const [expanded, setExpanded] = useState(false);
   const roomMeetings = meetings.filter(m => m.room_id === room.room_id && m.user_id === room.user_id);
+  const roomAgents = agents.filter(a => a.room_id === room.room_id && a.user_id === room.user_id);
+  const hasChildren = roomMeetings.length > 0 || roomAgents.length > 0;
 
   return (
     <>
       <tr
         className="border-b border-border hover:bg-muted/30 transition-colors cursor-pointer"
-        onClick={() => roomMeetings.length > 0 && setExpanded(v => !v)}
+        onClick={() => hasChildren && setExpanded(v => !v)}
       >
         <td className="px-4 py-3">
           <span className="font-mono text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5">
@@ -112,7 +115,7 @@ function RoomRowItem({ room, meetings }: { room: RoomRow; meetings: MeetingRow[]
         </td>
         <td className="px-4 py-3 font-medium text-foreground max-w-[160px] truncate">
           <div className="flex items-center gap-2">
-            {roomMeetings.length > 0 ? (
+            {hasChildren ? (
               expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             ) : (
               <span className="w-3.5 shrink-0" />
@@ -151,41 +154,84 @@ function RoomRowItem({ room, meetings }: { room: RoomRow; meetings: MeetingRow[]
         </td>
       </tr>
 
+      {/* Agent sub-rows */}
+      {expanded && roomAgents.length > 0 && (
+        <>
+          <tr className="border-b border-border bg-muted/10">
+            <td colSpan={8} className="px-4 py-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Agents in this room</span>
+            </td>
+          </tr>
+          {roomAgents.map(agent => (
+            <tr key={agent.id} className="border-b border-border bg-primary/5">
+              <td className="px-4 py-2" />
+              <td className="px-4 py-2" colSpan={2}>
+                <div className="flex items-center gap-2 pl-5 border-l-2 border-primary/40 ml-1.5">
+                  <Users className="h-3 w-3 text-primary shrink-0" />
+                  <span className="text-xs font-medium text-foreground">{agent.name}</span>
+                  {agent.role && (
+                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">· {agent.role}</span>
+                  )}
+                </div>
+              </td>
+              <td className="px-4 py-2" colSpan={2}>
+                <span className="font-mono text-[10px] bg-muted rounded px-1.5 py-0.5">
+                  {agent.provider}/{agent.model}
+                </span>
+              </td>
+              <td className="px-4 py-2 text-[10px] text-muted-foreground">{agent.domain || '—'}</td>
+              <td className="px-4 py-2" colSpan={2} />
+            </tr>
+          ))}
+        </>
+      )}
+
       {/* Meeting sub-rows */}
-      {expanded && roomMeetings.map(meeting => (
-        <tr key={meeting.id} className="border-b border-border bg-accent/5">
-          <td className="px-4 py-2" />
-          <td className="px-4 py-2" colSpan={1}>
-            <div className="flex items-center gap-2 pl-5 border-l-2 border-accent/40 ml-1.5">
-              <Calendar className="h-3 w-3 text-accent shrink-0" />
-              <span className="text-xs font-medium text-foreground truncate max-w-[140px]">{meeting.topic}</span>
-            </div>
-          </td>
-          <td className="px-4 py-2 text-xs text-muted-foreground truncate max-w-[200px]">
-            <div className="flex items-center gap-1">
-              <Target className="h-3 w-3 shrink-0" />
-              {meeting.goals || '—'}
-            </div>
-          </td>
-          <td className="px-4 py-2" />
-          <td className="px-4 py-2">
-            <StatusBadge status={meeting.status} />
-          </td>
-          <td className="px-4 py-2 text-xs text-muted-foreground text-center">
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {meeting.duration_minutes}m
-            </span>
-          </td>
-          <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
-            <span className="flex items-center gap-1">
-              <Zap className="h-3 w-3" />
-              {fmtDatetime(meeting.started_at)}
-            </span>
-          </td>
-          <td className="px-4 py-2" />
-        </tr>
-      ))}
+      {expanded && roomMeetings.length > 0 && (
+        <>
+          {roomAgents.length > 0 && (
+            <tr className="border-b border-border bg-muted/10">
+              <td colSpan={8} className="px-4 py-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Meetings in this room</span>
+              </td>
+            </tr>
+          )}
+          {roomMeetings.map(meeting => (
+            <tr key={meeting.id} className="border-b border-border bg-accent/5">
+              <td className="px-4 py-2" />
+              <td className="px-4 py-2" colSpan={1}>
+                <div className="flex items-center gap-2 pl-5 border-l-2 border-accent/40 ml-1.5">
+                  <Calendar className="h-3 w-3 text-accent shrink-0" />
+                  <span className="text-xs font-medium text-foreground truncate max-w-[140px]">{meeting.topic}</span>
+                </div>
+              </td>
+              <td className="px-4 py-2 text-xs text-muted-foreground truncate max-w-[200px]">
+                <div className="flex items-center gap-1">
+                  <Target className="h-3 w-3 shrink-0" />
+                  {meeting.goals || '—'}
+                </div>
+              </td>
+              <td className="px-4 py-2" />
+              <td className="px-4 py-2">
+                <StatusBadge status={meeting.status} />
+              </td>
+              <td className="px-4 py-2 text-xs text-muted-foreground text-center">
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {meeting.duration_minutes}m
+                </span>
+              </td>
+              <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                <span className="flex items-center gap-1">
+                  <Zap className="h-3 w-3" />
+                  {fmtDatetime(meeting.started_at)}
+                </span>
+              </td>
+              <td className="px-4 py-2" />
+            </tr>
+          ))}
+        </>
+      )}
     </>
   );
 }
@@ -417,7 +463,7 @@ export default function AdminPage() {
         ) : (
           <>
             <p className="text-xs text-muted-foreground mb-2">
-              Click on a room row to expand its meetings.
+              Click on a room row to expand its agents and meetings.
             </p>
             <div className="rounded-lg border border-border overflow-hidden">
               <div className="overflow-x-auto">
@@ -436,7 +482,7 @@ export default function AdminPage() {
                   </thead>
                   <tbody>
                     {filteredRooms.map(room => (
-                      <RoomRowItem key={room.id} room={room} meetings={filteredMeetings} />
+                      <RoomRowItem key={room.id} room={room} meetings={filteredMeetings} agents={filteredAgents} />
                     ))}
                   </tbody>
                 </table>

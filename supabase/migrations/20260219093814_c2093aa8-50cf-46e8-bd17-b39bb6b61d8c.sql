@@ -1,0 +1,1 @@
+ALTER TABLE public.agent_snapshots ADD COLUMN IF NOT EXISTS room_id text NOT NULL DEFAULT '';
