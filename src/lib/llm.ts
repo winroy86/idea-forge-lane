@@ -556,16 +556,34 @@ Be honest and analytical in your thinking. This is your private space.`;
     ? `${system}\n\nYou have access to the following tools:\n${toolDescriptions.join('\n')}\n\nWhen you use a tool, the results will be provided to you automatically.\n\nIMPORTANT: When you execute code, ALWAYS include the code you ran and the output in your public response using markdown code blocks. The group should be able to see and verify your calculations.`
     : system;
 
+  // Build history for Pass 2 (public response).
+  // We inject the private analysis as a system-level note rather than an assistant turn
+  // to prevent models from echoing the analytical style in the public response.
   const responseHistory = innerThoughts
     ? [
         ...history,
-        { role: 'assistant' as const, content: `[My private analysis]: ${innerThoughts}` },
-        { role: 'user' as const, content: 'Now provide your PUBLIC response to the group. Be concise and impactful. Do NOT reveal your private thinking process — just share your conclusion and arguments. If you used code execution, include the code and output in your response.' },
+        {
+          role: 'user' as const,
+          content: `[PRIVATE CONTEXT — do NOT repeat or reference this in your reply]\n${innerThoughts}\n[END PRIVATE CONTEXT]\n\nNow write your PUBLIC response to the group. This is what everyone will see. Be direct and concise — just state your actual answer or contribution. Do NOT mention "private analysis", "inner thoughts", or any meta-commentary about your reasoning process. Simply respond as ${agent.name}.`,
+        },
       ]
     : history;
 
   const publicResult = await callProviderRaw(agent, responseSystem, responseHistory, toolsEnabled.length > 0 ? toolsEnabled : undefined);
   tokensUsed = (tokensUsed || 0) + (publicResult.tokensUsed || 0);
+
+  // Guard: strip any leaked private-analysis markers from the public content
+  let publicContent = publicResult.content;
+  // Remove any lines starting with [PRIVATE CONTEXT], [My private analysis], or similar
+  publicContent = publicContent
+    .replace(/^\[(?:PRIVATE CONTEXT|My private analysis)[^\]]*\][\s\S]*?\[END PRIVATE CONTEXT\]\s*/im, '')
+    .replace(/^\[(?:PRIVATE CONTEXT|My private analysis)[^\]]*\].*\n?/im, '')
+    .trim();
+  // If the model prefixed with "As [agent name]," or "PUBLIC RESPONSE:" strip it
+  publicContent = publicContent
+    .replace(/^PUBLIC RESPONSE:\s*/i, '')
+    .replace(/^\*?\*?PUBLIC RESPONSE:\*?\*?\s*/i, '')
+    .trim();
 
   // Build structured code blocks from tool calls
   const codeBlocks: CodeBlockMeta[] = [];
@@ -601,7 +619,7 @@ Be honest and analytical in your thinking. This is your private space.`;
   // Extract public code blocks from the agent's response content (markdown ```blocks```)
   const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
   let match;
-  while ((match = codeBlockRegex.exec(publicResult.content)) !== null) {
+  while ((match = codeBlockRegex.exec(publicContent)) !== null) {
     const lang = match[1] || 'javascript';
     const code = match[2].trim();
     if (code.length > 0) {
@@ -617,7 +635,7 @@ Be honest and analytical in your thinking. This is your private space.`;
   // Auto-manage memory (does NOT count as a research loop)
   if (agent.memoryEnabled && roomId) {
     // 1. Save current response as short-term working note
-    const shortTermContent = `## Response at ${new Date().toISOString()}\n**Topic:** ${messages[messages.length - 1]?.content?.slice(0, 100) || 'conversation'}\n**Key points from my response:** ${publicResult.content.slice(0, 500)}`;
+    const shortTermContent = `## Response at ${new Date().toISOString()}\n**Topic:** ${messages[messages.length - 1]?.content?.slice(0, 100) || 'conversation'}\n**Key points from my response:** ${publicContent.slice(0, 500)}`;
     writeMemoryFile(agent.id, roomId, `response-${Date.now()}.md`, shortTermContent, 'short-term');
 
     // 2. Auto-consolidate: update long-term memory with a running summary
@@ -634,8 +652,8 @@ Be honest and analytical in your thinking. This is your private space.`;
       .join('\n');
 
     const updatedSummary = previousSummary
-      ? `${previousSummary.slice(0, 3000)}\n\n### Update (${new Date().toISOString().slice(0, 16)})\n${publicResult.content.slice(0, 300)}`
-      : `## ${agent.name} — Running Summary\n### ${new Date().toISOString().slice(0, 16)}\n${publicResult.content.slice(0, 500)}`;
+      ? `${previousSummary.slice(0, 3000)}\n\n### Update (${new Date().toISOString().slice(0, 16)})\n${publicContent.slice(0, 300)}`
+      : `## ${agent.name} — Running Summary\n### ${new Date().toISOString().slice(0, 16)}\n${publicContent.slice(0, 500)}`;
 
     // Keep long-term summary under size limit by trimming oldest entries
     writeMemoryFile(agent.id, 'global', 'running-summary.md', updatedSummary.slice(0, 8000), 'long-term');
@@ -644,7 +662,7 @@ Be honest and analytical in your thinking. This is your private space.`;
   const latencyMs = Math.round(performance.now() - start);
 
   return {
-    content: publicResult.content,
+    content: publicContent,
     innerThoughts: innerThoughts || undefined,
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     tokensUsed,
