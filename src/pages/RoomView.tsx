@@ -53,6 +53,8 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { syncRoom, syncMeeting, syncAgent } from '@/lib/usageSync';
+import { fetchModelPolicy, filterModelsByPolicy, AllowedModel } from '@/lib/modelPolicy';
+import { useAdminRole } from '@/lib/useAdminRole';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -181,6 +183,12 @@ export default function RoomView() {
   const { toast } = useToast();
   const [bubbleMode] = useState(() => getChatBubbleMode());
   const [bubblePanelOpen, setBubblePanelOpen] = useState(false);
+  const { isAdmin } = useAdminRole();
+  const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([]);
+
+  useEffect(() => {
+    fetchModelPolicy().then(setModelPolicy).catch(() => {});
+  }, []);
 
   // Meeting state
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
@@ -1273,7 +1281,9 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                     : '__lovable__';
 
                   const selectedProviderObj = room.summarizer?.provider || 'lovable';
-                  const modelOptions = PROVIDER_DEFAULT_MODELS[selectedProviderObj] || [];
+                  const rawModelOptions = (PROVIDER_DEFAULT_MODELS[selectedProviderObj] || []).map(m => ({ value: m, label: m }));
+                  const filteredModelOptions = isAdmin ? rawModelOptions : filterModelsByPolicy(rawModelOptions, selectedProviderObj, modelPolicy);
+                  const modelOptions = filteredModelOptions.map(m => m.value);
 
                   return (
                     <div className="space-y-3">

@@ -647,7 +647,7 @@ function AgentEditor({ agent, onSave, onClose, policy, isAdmin }: { agent: Agent
   );
 }
 
-function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent) => void; onClose: () => void }) {
+function PersonaGenerator({ onGenerated, onClose, policy, isAdmin }: { onGenerated: (agent: Agent) => void; onClose: () => void; policy: AllowedModel[]; isAdmin: boolean }) {
   const [mode, setMode] = useState<'famous' | 'custom'>('famous');
   const [personName, setPersonName] = useState('');
   const [description, setDescription] = useState('');
@@ -866,18 +866,30 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
                 <Select value={personaModel} onValueChange={setPersonaModel}>
                   <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {LOVABLE_MODELS.map(m => (
+                    {(isAdmin ? LOVABLE_MODELS : filterModelsByPolicy(LOVABLE_MODELS, 'lovable', policy)).map(m => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              ) : (
+              ) : (['ollama', 'custom'].includes(selectedProviderObj?.provider || '')) ? (
                 <Input
                   className="mt-1 h-8 text-xs"
                   value={personaModel}
                   onChange={e => setPersonaModel(e.target.value)}
                   placeholder={DEFAULT_MODELS[selectedProviderObj?.provider || 'openai'] || 'model name'}
                 />
+              ) : (
+                <Select value={personaModel} onValueChange={setPersonaModel}>
+                  <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(isAdmin
+                      ? (PROVIDER_PRESET_MODELS[selectedProviderObj?.provider || ''] || [])
+                      : filterModelsByPolicy(PROVIDER_PRESET_MODELS[selectedProviderObj?.provider || ''] || [], selectedProviderObj?.provider || '', policy)
+                    ).map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </div>
           </div>
@@ -1084,13 +1096,15 @@ export default function AgentsPage() {
 
       <Dialog open={showGenerator} onOpenChange={setShowGenerator}>
         {showGenerator && (
-          <PersonaGenerator
+        <PersonaGenerator
             onGenerated={(agent) => {
               upsertAgent(agent);
               setShowGenerator(false);
               refresh();
             }}
             onClose={() => setShowGenerator(false)}
+            policy={modelPolicy}
+            isAdmin={isAdmin}
           />
         )}
       </Dialog>
