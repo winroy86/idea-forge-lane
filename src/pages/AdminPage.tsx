@@ -357,11 +357,15 @@ export default function AdminPage() {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       if (currentlyAllowed) {
         // Remove from policy (no entry = no restriction if no other entries exist, but we DELETE to clean up)
-        await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
+        const res = await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
           method: 'DELETE',
           headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
           body: JSON.stringify({ provider, model_id: modelId }),
         });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? 'Failed to remove model from policy');
+        }
         setModelPolicy(prev => prev.filter(m => !(m.provider === provider && m.model_id === modelId)));
       } else {
         // Add to policy as allowed
