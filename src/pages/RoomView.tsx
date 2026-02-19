@@ -52,6 +52,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
+import { syncRoom, syncMeeting } from '@/lib/usageSync';
 
 const AGENT_COLORS = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5', 'agent-6'];
 
@@ -528,6 +529,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
       createdAt: new Date().toISOString(),
     };
     saveMeetingSession(session);
+    syncMeeting(session); // fire-and-forget usage tracking
     const updated = {
       ...room,
       meetings: [...(room.meetings || []), session],
@@ -535,6 +537,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
       updatedAt: new Date().toISOString(),
     };
     upsertRoom(updated);
+    syncRoom(updated); // fire-and-forget usage tracking
     setRoom(updated);
     setActiveMeeting(session);
     wrapUpTriggeredRef.current = false;

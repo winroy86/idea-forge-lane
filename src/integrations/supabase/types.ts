@@ -53,6 +53,48 @@ export type Database = {
         }
         Relationships: []
       }
+      meeting_snapshots: {
+        Row: {
+          created_at: string
+          duration_minutes: number
+          goals: string
+          id: string
+          meeting_id: string
+          room_id: string
+          started_at: string
+          status: string
+          topic: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_minutes?: number
+          goals?: string
+          id?: string
+          meeting_id: string
+          room_id: string
+          started_at?: string
+          status?: string
+          topic?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_minutes?: number
+          goals?: string
+          id?: string
+          meeting_id?: string
+          room_id?: string
+          started_at?: string
+          status?: string
+          topic?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       room_snapshots: {
         Row: {
           agent_count: number
