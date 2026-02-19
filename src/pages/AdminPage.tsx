@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShieldCheck, Users, MessageSquare, Calendar, Filter, RefreshCw,
-  ChevronDown, ChevronRight, Clock, Target, Zap,
+  ChevronDown, ChevronRight, Clock, Target, Zap, UserCog, Shield, User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAdminRole } from '@/lib/useAdminRole';
 import { supabase } from '@/integrations/supabase/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { useToast } from '@/hooks/use-toast';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabase as unknown as SupabaseClient<any>;
@@ -50,6 +51,14 @@ interface AgentRow {
   created_at: string;
 }
 
+interface UserRow {
+  id: string;
+  email: string;
+  created_at: string;
+  last_sign_in_at: string | null;
+  role: 'admin' | 'user';
+}
+
 function fmt(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -68,6 +77,20 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded capitalize ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
       {status}
+    </span>
+  );
+}
+
+function RoleBadge({ role }: { role: 'admin' | 'user' }) {
+  return role === 'admin' ? (
+    <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-accent/20 text-accent">
+      <Shield className="h-3 w-3" />
+      Admin
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-muted text-muted-foreground">
+      <User className="h-3 w-3" />
+      User
     </span>
   );
 }
@@ -167,16 +190,26 @@ function RoomRowItem({ room, meetings }: { room: RoomRow; meetings: MeetingRow[]
   );
 }
 
+async function getAuthHeader(): Promise<string> {
+  if (!supabase) return '';
+  const { data: { session } } = await supabase.auth.getSession();
+  return session ? `Bearer ${session.access_token}` : '';
+}
+
 export default function AdminPage() {
   const { isAdmin, loading: roleLoading } = useAdminRole();
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [meetings, setMeetings] = useState<MeetingRow[]>([]);
   const [agents, setAgents] = useState<AgentRow[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [roleUpdating, setRoleUpdating] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<'rooms' | 'agents'>('rooms');
+  const [activeTab, setActiveTab] = useState<'rooms' | 'agents' | 'users'>('rooms');
 
   // Redirect non-admins
   useEffect(() => {
@@ -203,10 +236,56 @@ export default function AdminPage() {
     }
   };
 
+  const fetchUsers = useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      const authHeader = await getAuthHeader();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users`,
+        { headers: { Authorization: authHeader, 'Content-Type': 'application/json' } }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to fetch users');
+      setUsers(data.users ?? []);
+    } catch (e) {
+      toast({ title: 'Error loading users', description: String(e), variant: 'destructive' });
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [toast]);
+
+  const handleRoleChange = async (userId: string, newRole: 'admin' | 'user') => {
+    setRoleUpdating(userId);
+    try {
+      const authHeader = await getAuthHeader();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users`,
+        {
+          method: 'POST',
+          headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, role: newRole }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to update role');
+
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      toast({ title: 'Role updated', description: `User role changed to ${newRole}.` });
+    } catch (e) {
+      toast({ title: 'Error updating role', description: String(e), variant: 'destructive' });
+    } finally {
+      setRoleUpdating(null);
+    }
+  };
+
   useEffect(() => {
     if (isAdmin) fetchData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin && activeTab === 'users') fetchUsers();
+  }, [isAdmin, activeTab, fetchUsers]);
 
   if (roleLoading) {
     return (
@@ -238,7 +317,7 @@ export default function AdminPage() {
             <p className="text-sm text-muted-foreground mt-0.5">Platform usage overview — metadata only, no conversation content</p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
+        <Button variant="outline" size="sm" onClick={() => { fetchData(); if (activeTab === 'users') fetchUsers(); }} className="gap-2">
           <RefreshCw className="h-3.5 w-3.5" />
           Refresh
         </Button>
@@ -264,7 +343,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* Filters + Tabs */}
+      {/* Tabs */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="flex rounded-lg border border-border overflow-hidden">
           <button
@@ -289,28 +368,42 @@ export default function AdminPage() {
             <Users className="h-3.5 w-3.5" />
             Agents ({filteredAgents.length})
           </button>
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === 'users'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <UserCog className="h-3.5 w-3.5" />
+            Users
+          </button>
         </div>
 
-        <div className="flex items-center gap-2 ml-auto">
-          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-          <Select value={selectedUser} onValueChange={setSelectedUser}>
-            <SelectTrigger className="w-44 h-8 text-xs">
-              <SelectValue placeholder="Filter by user" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All users</SelectItem>
-              {allUserIds.map(uid => (
-                <SelectItem key={uid} value={uid}>
-                  {uid.slice(0, 8)}…
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {/* Filter — only for rooms/agents tabs */}
+        {activeTab !== 'users' && (
+          <div className="flex items-center gap-2 ml-auto">
+            <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select value={selectedUser} onValueChange={setSelectedUser}>
+              <SelectTrigger className="w-44 h-8 text-xs">
+                <SelectValue placeholder="Filter by user" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All users</SelectItem>
+                {allUserIds.map(uid => (
+                  <SelectItem key={uid} value={uid}>
+                    {uid.slice(0, 8)}…
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
 
       {/* Loading */}
-      {loading ? (
+      {loading && activeTab !== 'users' ? (
         <div className="flex items-center justify-center py-20">
           <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
@@ -351,7 +444,7 @@ export default function AdminPage() {
             </div>
           </>
         )
-      ) : (
+      ) : activeTab === 'agents' ? (
         /* Agents Table */
         filteredAgents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground">
@@ -400,6 +493,87 @@ export default function AdminPage() {
               </table>
             </div>
           </div>
+        )
+      ) : (
+        /* Users Tab */
+        usersLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : users.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground">
+            <UserCog className="h-10 w-10 mb-3 opacity-30" />
+            <p className="text-sm">No users found.</p>
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground mb-2">
+              Change a user's role using the dropdown. Admins can access the admin section. You cannot remove your own admin role.
+            </p>
+            <div className="rounded-lg border border-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/50">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Email</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Current Role</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Joined</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Last Sign In</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Change Role</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((user, i) => (
+                      <tr key={user.id} className={`border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-muted/20'}`}>
+                        <td className="px-4 py-3">
+                          <div>
+                            <span className="font-medium text-foreground text-sm">{user.email || '—'}</span>
+                            <span className="block font-mono text-[10px] text-muted-foreground mt-0.5">{user.id.slice(0, 12)}…</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <RoleBadge role={user.role} />
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                          {fmt(user.created_at)}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                          {user.last_sign_in_at ? fmtDatetime(user.last_sign_in_at) : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Select
+                            value={user.role}
+                            onValueChange={(val) => handleRoleChange(user.id, val as 'admin' | 'user')}
+                            disabled={roleUpdating === user.id}
+                          >
+                            <SelectTrigger className="w-32 h-7 text-xs">
+                              {roleUpdating === user.id ? (
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <SelectValue />
+                              )}
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="admin">
+                                <span className="flex items-center gap-1.5">
+                                  <Shield className="h-3 w-3" /> Admin
+                                </span>
+                              </SelectItem>
+                              <SelectItem value="user">
+                                <span className="flex items-center gap-1.5">
+                                  <User className="h-3 w-3" /> Normal User
+                                </span>
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
         )
       )}
     </div>
