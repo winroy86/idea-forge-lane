@@ -39,15 +39,19 @@ const FAMOUS_SUGGESTIONS = [
   'Richard Feynman', 'Oprah Winfrey', 'Machiavelli', 'Carl Sagan',
 ];
 
-const DEFAULT_CONFIG: AgentConfig = {
-  provider: 'lovable',
-  model: DEFAULT_MODELS.lovable,
-  temperature: 0.7,
-  topP: 1,
-  maxTokens: 2048,
-  presencePenalty: 0,
-  frequencyPenalty: 0,
-};
+function getDefaultConfig(): AgentConfig {
+  const selection = getDefaultLlmSelection();
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    temperature: 0.7,
+    topP: 1,
+    maxTokens: 2048,
+    presencePenalty: 0,
+    frequencyPenalty: 0,
+    ...(selection.baseUrl ? { baseUrl: selection.baseUrl } : {}),
+  };
+}
 
 const LOVABLE_MODELS = [
   { value: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash (Fast)' },
@@ -129,7 +133,7 @@ function AgentEditor({ agent, onSave, onClose }: { agent: Agent | null; onSave: 
       pointOfView: '',
       systemPrompt: '',
       styleVoice: '',
-      config: { ...DEFAULT_CONFIG },
+      config: { ...getDefaultConfig() },
       colorIndex: Math.floor(Math.random() * 6),
       memoryEnabled: true,
       researchLoops: 0,
@@ -705,7 +709,7 @@ function PersonaGenerator({ onGenerated, onClose }: { onGenerated: (agent: Agent
         pointOfView: persona.pointOfView,
         systemPrompt: persona.systemPrompt,
         styleVoice: persona.styleVoice,
-        config: { ...DEFAULT_CONFIG },
+        config: { ...getDefaultConfig() },
         colorIndex: Math.floor(Math.random() * 6),
         memoryEnabled: true,
         researchLoops: 0,

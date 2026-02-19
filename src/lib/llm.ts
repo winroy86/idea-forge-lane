@@ -860,33 +860,14 @@ export async function callSummarizer(
     }
     usedModel = model;
     usedProvider = providerType;
-  } else if (hasLovableCloud) {
-    // Default: use Lovable AI
-    const defaultModel = 'google/gemini-3-flash-preview';
-    const tempAgent = {
-      config: {
-        provider: 'lovable' as const,
-        model: defaultModel,
-        temperature: 0.3,
-        topP: 1,
-        maxTokens: 2048,
-        presencePenalty: 0,
-        frequencyPenalty: 0,
-      },
-    } as Agent;
-    const result = await callLovableAI(defaultModel, system, history, tempAgent);
-    content = result.content;
-    usedModel = defaultModel;
-    usedProvider = 'lovable';
   } else {
-    const selected = isBackendModeEnabled
-      ? getDefaultLlmSelection()
-      : getDefaultLlmSelection({ provider: providers[0].provider });
-    const provider = providers[0];
+    // Default: use first active configured provider, fall back to Lovable AI
+    const sel = getDefaultLlmSelection();
     const tempAgent = {
       config: {
-        provider: selected.provider,
-        model: selected.model,
+        provider: sel.provider,
+        model: sel.model,
+        baseUrl: sel.baseUrl,
         temperature: 0.3,
         topP: 1,
         maxTokens: 2048,
@@ -895,33 +876,31 @@ export async function callSummarizer(
       },
     } as Agent;
 
-    if (isBackendModeEnabled) {
-      const backendResult = await callProviderViaBackend(selected.provider, selected.model, system, history, tempAgent);
-      content = backendResult.content;
-    } else switch (provider.provider) {
-      case 'anthropic': {
-        const result = await callAnthropic(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      case 'gemini': {
-        const result = await callGemini(provider.apiKey, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
-      default: {
-        const baseUrl = provider.provider === 'ollama'
-          ? (provider.baseUrl || 'http://localhost:11434/v1')
-          : provider.provider === 'custom'
-          ? (provider.baseUrl || '')
-          : 'https://api.openai.com/v1';
-        const result = await callOpenAICompatible(provider.apiKey, baseUrl, tempAgent.config.model, system, history, tempAgent);
-        content = result.content;
-        break;
-      }
+    if (sel.provider === 'lovable') {
+      const result = await callLovableAI(sel.model, system, history, tempAgent);
+      content = result.content;
+    } else if (hasCloudBackendForProvider(sel.provider)) {
+      const baseUrl = sel.baseUrl || getDefaultBaseUrl(sel.provider);
+      const result = await callViaEdgeFunction(sel.provider, sel.model, system, history, tempAgent, undefined, undefined, baseUrl || undefined);
+      content = result.content;
+    } else if (sel.provider === 'anthropic') {
+      const provider = findProvider('anthropic', sel.baseUrl);
+      if (!provider?.apiKey) throw new Error('No Anthropic API key configured.');
+      const result = await callAnthropic(provider.apiKey, sel.model, system, history, tempAgent);
+      content = result.content;
+    } else if (sel.provider === 'gemini') {
+      const provider = findProvider('gemini', sel.baseUrl);
+      if (!provider?.apiKey) throw new Error('No Gemini API key configured.');
+      const result = await callGemini(provider.apiKey, sel.model, system, history, tempAgent);
+      content = result.content;
+    } else {
+      const baseUrl = sel.baseUrl || getDefaultBaseUrl(sel.provider) || '';
+      const provider = findProvider(sel.provider, baseUrl);
+      const result = await callOpenAICompatible(provider?.apiKey || '', baseUrl, sel.model, system, history, tempAgent);
+      content = result.content;
     }
-    usedModel = tempAgent.config.model;
-    usedProvider = isBackendModeEnabled ? selected.provider : provider.provider;
+    usedModel = sel.model;
+    usedProvider = sel.provider;
   }
 
   return {
