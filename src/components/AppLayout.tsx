@@ -9,10 +9,12 @@ import {
   Menu,
   X,
   Zap,
+  ShieldCheck,
 } from 'lucide-react';
 import { capabilities, capabilityLabel } from '@/lib/capabilities';
 import { clearSession, getSession, isAuthEnabled } from '@/lib/auth';
 import { testIds } from '@/testIds';
+import { useAdminRole } from '@/lib/useAdminRole';
 
 interface LayoutContextType {
   sidebarOpen: boolean;
@@ -34,6 +36,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { isAdmin } = useAdminRole();
 
   const session = getSession();
 
@@ -90,6 +93,22 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 {item.label}
               </button>
             ))}
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  navigate('/admin');
+                  setSidebarOpen(false);
+                }}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive('/admin')
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Admin
+              </button>
+            )}
           </nav>
 
           <div className="border-t border-border p-3">

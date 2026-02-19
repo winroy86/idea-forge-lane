@@ -13,6 +13,7 @@ import AgentsPage from './pages/AgentsPage';
 import SkillsPage from './pages/SkillsPage';
 import ProvidersPage from './pages/ProvidersPage';
 import SettingsPage from './pages/SettingsPage';
+import AdminPage from './pages/AdminPage';
 import LoginPage from './pages/LoginPage';
 import NotFound from './pages/NotFound';
 import { hasSupabaseConfig, supabase } from '@/integrations/supabase/client';
@@ -62,6 +63,7 @@ const App = () => {
                       <Route path="/skills" element={<SkillsPage />} />
                       <Route path="/providers" element={<ProvidersPage />} />
                       <Route path="/settings" element={<SettingsPage />} />
+                      <Route path="/admin" element={<AdminPage />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>
                   </AppLayout>

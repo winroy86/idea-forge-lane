@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, MessageSquare, Users, Trash2, Timer, History, AlertTriangle } from 'lucide-react';
 import { Room, MeetingSession } from '@/types';
 import { getRooms, deleteRoom, generateId, upsertRoom, getAllMeetings, clearMessages } from '@/lib/store';
+import { syncRoom } from '@/lib/usageSync';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -40,6 +41,7 @@ function CreateRoomDialog({ onCreated }: { onCreated: () => void }) {
       updatedAt: new Date().toISOString(),
     };
     upsertRoom(room);
+    syncRoom(room); // fire-and-forget
     setTitle('');
     setGoal('');
     setOpen(false);
@@ -164,6 +166,11 @@ export default function Dashboard() {
   };
   useEffect(refresh, []);
 
+  const handleOpenRoom = (room: Room) => {
+    syncRoom(room); // fire-and-forget — updates last_opened_at
+    navigate(`/room/${room.id}`);
+  };
+
   return (
     <div className="animate-fade-in p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -192,7 +199,7 @@ export default function Dashboard() {
             return (
               <div
                 key={room.id}
-                onClick={() => navigate(`/room/${room.id}`)}
+                onClick={() => handleOpenRoom(room)}
                 className="group cursor-pointer rounded-lg border border-border bg-card p-4 shadow-soft transition-all hover:shadow-elevated hover:border-accent/40"
               >
                 <div className="flex items-start justify-between">
