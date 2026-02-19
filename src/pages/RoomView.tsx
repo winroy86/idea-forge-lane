@@ -1287,9 +1287,16 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
 
                   return (
                     <div className="space-y-3">
-                      <div>
-                        <p className="text-xs font-semibold text-foreground mb-0.5">Summarizer provider</p>
-                        <p className="text-[10px] text-muted-foreground mb-2">Select from your configured providers. Defaults to Lovable AI.</p>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold text-foreground mb-0.5">Summarizer provider</p>
+                          <p className="text-[10px] text-muted-foreground mb-2">Select from your configured providers. Defaults to Lovable AI.</p>
+                        </div>
+                        {!isAdmin && modelPolicy.length > 0 && (
+                          <span className="shrink-0 flex items-center gap-1 text-[10px] text-destructive/80 bg-destructive/10 border border-destructive/20 rounded px-1.5 py-0.5">
+                            <Settings2 className="h-2.5 w-2.5" /> Admin-restricted
+                          </span>
+                        )}
                       </div>
                       <div>
                         <Label className="text-[10px] text-muted-foreground">Provider</Label>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle, ShieldAlert } from 'lucide-react';
 import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { waitForProviderHydration } from '@/lib/providerHydration';
@@ -249,7 +249,14 @@ function AgentEditor({ agent, onSave, onClose, policy, isAdmin }: { agent: Agent
 
         {/* LLM Config */}
         <div className="border-t border-border pt-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Model Configuration</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Model Configuration</p>
+            {!isAdmin && policy.length > 0 && (
+              <span className="flex items-center gap-1 text-[10px] text-destructive/80 bg-destructive/10 border border-destructive/20 rounded px-1.5 py-0.5">
+                <ShieldAlert className="h-2.5 w-2.5" /> Admin-restricted
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Provider</Label>
@@ -834,7 +841,14 @@ function PersonaGenerator({ onGenerated, onClose, policy, isAdmin }: { onGenerat
 
         {/* Provider & Model selection */}
         <div className="rounded-md border border-border p-3 space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">AI Provider for generation</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">AI Provider for generation</p>
+            {!isAdmin && policy.length > 0 && (
+              <span className="flex items-center gap-1 text-[10px] text-destructive/80 bg-destructive/10 border border-destructive/20 rounded px-1.5 py-0.5">
+                <ShieldAlert className="h-2.5 w-2.5" /> Admin-restricted
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-[10px] text-muted-foreground">Provider</Label>
