@@ -1,124 +1,128 @@
 
-## Chat Bubble View Mode — Mockup-Inspired Visualization
+## Admin Dashboard & Usage Tracking System
 
-### What the Mockup Shows vs. Current UI
+### Goal Summary
 
-The mockup depicts a mobile-first chat room with:
-- A horizontal row of circular agent avatars (with name + role below) pinned below the room title
-- Full-width colored chat bubbles per agent (solid colored background, not just a border accent)
-- Agent name label displayed prominently at the top of each bubble
-- User messages as a clean text input at the bottom
-- A warmer/lighter background (beige tones)
-- No visible right sidebar — agents shown compactly as icons at the top
+Add a two-tier user system:
+- **Admin users** — see a new admin dashboard showing all users' rooms and agents across the platform
+- **Regular users** — experience zero change from today; their data is synced to the database silently in the background
 
-The current UI uses a card-with-border approach with a right-panel agent roster. The goal is to add a **"Chat Bubble" view mode** as a settings toggle that transforms the room's visual presentation to match the mockup, without removing any functionality.
+No conversation content (messages) is ever stored in the database. Only structural metadata: room titles/goals, agent names/roles/providers, and skill names.
 
 ---
 
-### Implementation Strategy
-
-A new boolean preference (`chatBubbleMode`) will be stored in `localStorage` under app preferences. A toggle will be added to the **Settings page** so users can switch between "Default" and "Chat Bubble" modes globally. The RoomView will read this preference and render accordingly.
-
----
-
-### Changes Required
-
-**1. `src/lib/store.ts` (or a new `src/lib/appPrefs.ts`)**
-
-Add two small helper functions:
-- `getChatBubbleMode(): boolean` — reads from `localStorage`
-- `setChatBubbleMode(val: boolean): void` — writes to `localStorage`
-
-**2. `src/pages/SettingsPage.tsx`**
-
-Add a new "Appearance" card section with a toggle labeled **"Chat Bubble View"** (description: "Display room conversations as colored chat bubbles with agent avatars at the top, inspired by mobile messaging apps"). Uses the same `Switch` component pattern already in the file.
-
-**3. `src/pages/RoomView.tsx`**
-
-This is the largest change. Read `getChatBubbleMode()` on mount into a state variable `bubbleMode`. When `bubbleMode` is `true`, alter the rendering of:
-
-**A. Agent avatars bar** — Replace the right sidebar's agent list with a horizontal strip just below the room header. Each agent gets a circular avatar (initial letter on colored background), their name, and their role in a column. Tapping the avatar triggers `triggerAgent`. This row is shown instead of the right panel (the right panel is hidden in bubble mode on all screen sizes, with its useful controls like add/remove agent and Balance slider moved to a settings popover or kept accessible).
-
-**B. Message bubbles** — Instead of `border border-border` cards with subtle background tints, render:
-- Agent messages: fully colored background (`hsl(var(--agent-N) / 0.85)`) with white/dark text, rounded corners (more radius), left-aligned with a slight left margin, agent name shown in bold above the bubble content
-- User messages: right-aligned, solid secondary/dark background (as current), higher contrast
-- System/summarizer messages: centered, muted pill style (as current, already works well)
-
-The bubble container switches from `max-w-[85%]` to `max-w-[80%]` with more pronounced rounded corners (`rounded-2xl`). The agent avatar circle appears to the left of the bubble (inline), similar to messaging apps.
-
-**C. Background** — In bubble mode, apply a warmer background class to the messages area (`bg-amber-50/30 dark:bg-neutral-900`).
-
-**D. Agent panel** — In bubble mode, the right panel (`w-72 flex-col`) is hidden entirely. Its critical controls (add/remove agents, balance slider, documents, past meetings) are preserved in a collapsible drawer/popover triggered by the existing ⚙️ icon in the header.
-
----
-
-### Detailed File Plan
+### Architecture Overview
 
 ```text
-src/lib/store.ts
-  + getChatBubbleMode(): boolean
-  + setChatBubbleMode(enabled: boolean): void
+Database (new tables)
+├── user_roles          — maps user_id → 'admin' | 'user'
+├── room_snapshots      — per-user room metadata (title, goal, agentIds, orchestration, createdAt)
+└── agent_snapshots     — per-user agent metadata (name, role, domain, provider, model, createdAt)
+    (NO skill_snapshots — skills are built-in/imported locally, lower value for analytics)
 
-src/pages/SettingsPage.tsx
-  + import getChatBubbleMode, setChatBubbleMode
-  + New "Appearance" card with Switch for Chat Bubble Mode
+RLS policies
+├── room_snapshots: user can INSERT/UPDATE/DELETE their own rows; admin can SELECT all
+├── agent_snapshots: same pattern
+└── user_roles: users can only read their own role; only server-side (service role) can write
 
-src/pages/RoomView.tsx
-  + import getChatBubbleMode
-  + const [bubbleMode, setBubbleMode] = useState(() => getChatBubbleMode())
-  
-  In bubble mode:
-  + Render agent avatar strip below header (horizontal scroll row)
-  + Hide right panel entirely
-  + Move right-panel controls (add agents, docs, balance, meetings) into a 
-    Sheet/Drawer triggered by the existing ⚙️ mobile toggle button
-  + Message rendering:
-      - agent messages: colored bubble with avatar left, name label above content
-      - user messages: right-aligned dark bubble
-      - system/summarizer: centered pill (unchanged)
-  + Warmer background for message area
+Security helper
+└── has_role(user_id, role) — security definer function (prevents RLS recursion)
 ```
 
 ---
 
-### Technical Details
+### What Gets Synced & When
 
-**Agent avatar strip (bubble mode only):**
-```text
-[horizontal scrollable row, sticky below header]
-  For each roomAgent:
-    [clickable column]
-      [circle: colorIndex bg, initial letter, 40x40px]
-      [name: truncated, 10px]
-      [role: truncated, 9px, muted]
-      [loading pulse if this agent is loadingAgentId]
-```
+| Event | Data synced | What is NOT stored |
+|---|---|---|
+| User creates a room | title, goal, orchestration, agentIds count | conversation messages |
+| User opens a room | last_opened_at updated (upsert) | message contents |
+| User saves an agent | name, role, domain, provider, model | system prompts, API keys |
+| User creates a skill | name, category, description | skill step code |
 
-**Message bubble rendering (bubble mode):**
-```text
-Agent message:
-  [flex row, gap-2, align-start]
-    [circle avatar 28x28px, agent color]
-    [flex col]
-      [agent name, bold, 11px, agent color]
-      [bubble div: rounded-2xl px-4 py-3, bg agent color at 0.15 opacity,
-       border agent color at 0.35, text foreground]
-      [footer: timestamp, provider badge, model — same as current]
-
-User message:
-  [flex row, justify-end]
-    [bubble div: rounded-2xl px-4 py-3, bg secondary, text secondary-foreground]
-    [timestamp below, right-aligned]
-```
-
-**Right panel controls in bubble mode:**
-The existing `showAgentPanel` mobile-toggle button (⚙️ in header) will open a Sheet (side drawer) containing all the right-panel content: agent roster with add/remove, documents, balance slider, past meetings. This means zero functionality is lost.
+All syncing is **fire-and-forget** — it never blocks the UI. If it fails silently (e.g. network down), the user experience is unaffected.
 
 ---
 
-### What Does NOT Change
+### Files to Create / Modify
 
-- All agent triggering, auto-orchestration, summarizer, meetings, and message sending logic remain completely untouched
-- The right panel remains fully visible and functional in the default (non-bubble) mode
-- Provider badges, token counts, latency info, inner thoughts, code blocks — all preserved in both modes
-- The toggle in Settings is a global preference, applied consistently across all rooms
+**Database migrations (2 new files)**
+
+1. `supabase/migrations/..._user_roles.sql`
+   - `app_role` enum: `'admin' | 'user'`
+   - `user_roles` table with RLS: users read own row, no direct writes
+   - `has_role(user_id, role)` security definer function
+
+2. `supabase/migrations/..._usage_tracking.sql`
+   - `room_snapshots` table: `id, user_id, room_id (text), title, goal, orchestration, agent_count, created_at, last_opened_at, updated_at`
+   - `agent_snapshots` table: `id, user_id, agent_id (text), name, role, domain, provider, model, created_at, updated_at`
+   - RLS: users manage their own rows; admins (via `has_role`) can SELECT all rows
+
+**New file: `src/lib/usageSync.ts`**
+
+A lightweight module with fire-and-forget functions:
+- `syncRoom(room: Room): void` — upserts a row in `room_snapshots`
+- `syncAgent(agent: Agent): void` — upserts a row in `agent_snapshots`
+- Both check for an active Supabase session before attempting to sync; silently no-op if not authenticated or no Supabase config
+
+**New file: `src/lib/useAdminRole.ts`** (React hook)
+
+- Queries `user_roles` for the current user's role on mount
+- Returns `{ isAdmin: boolean; loading: boolean }`
+
+**Modified: `src/pages/Dashboard.tsx`**
+
+- Call `syncRoom(room)` after `upsertRoom()` in `CreateRoomDialog`
+- Call `syncRoom(room)` when a room card is clicked (open event — updates `last_opened_at`)
+
+**Modified: `src/pages/AgentsPage.tsx`**
+
+- Call `syncAgent(agent)` after `upsertAgent()` in `handleSave`
+
+**Modified: `src/pages/SkillsPage.tsx`**
+
+- Call `syncSkill(skill)` after `upsertSkill()` in `handleWizardSave` and `handleInstall` (optional, lower priority)
+
+**New file: `src/pages/AdminPage.tsx`**
+
+A new page (only visible/accessible to admin users) with:
+- A table of all users' rooms: columns = User email, Room title, Goal (truncated), Agents count, Orchestration, Created, Last opened
+- A table of all users' agents: columns = User email, Agent name, Role, Domain, Provider/Model, Created
+- Filter by user (dropdown of all user emails)
+- Simple date range filter
+- No links into the actual rooms (just metadata)
+
+**Modified: `src/App.tsx`**
+
+- Add route `/admin` → `<AdminPage />`
+- Wrap it in `<ProtectedRoute>` + an additional `AdminRoute` guard that checks `isAdmin`
+
+**Modified: `src/components/AppLayout.tsx`**
+
+- Add "Admin" nav item (with a `ShieldCheck` icon) that only renders when `isAdmin === true`
+- Uses `useAdminRole` hook to conditionally show the link
+
+---
+
+### Security Design
+
+- `has_role()` is a `SECURITY DEFINER` function — it bypasses RLS to check the `user_roles` table without recursion
+- Admins are assigned by manually inserting into `user_roles` via the backend SQL editor (or a one-time migration that seeds the first admin by email)
+- The `AdminPage` component additionally checks `isAdmin` client-side and redirects non-admins to `/`
+- API keys, system prompts, message content, and inner thoughts are **never stored** in any database table
+
+---
+
+### What Regular Users See
+
+Absolutely nothing changes. The sync calls are invisible background operations. The admin nav item does not appear for non-admin users.
+
+---
+
+### Technical Notes
+
+- `room_snapshots.room_id` stores the localStorage UUID as a `text` column (not a foreign key — rooms live in localStorage, not the DB)
+- `agent_snapshots.agent_id` similarly stores the local UUID as `text`
+- Upserts use `ON CONFLICT (user_id, room_id)` / `ON CONFLICT (user_id, agent_id)` to avoid duplicates
+- The admin email for the initial seed will be asked to the user before the migration runs
+
