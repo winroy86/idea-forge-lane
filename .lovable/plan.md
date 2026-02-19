@@ -1,128 +1,99 @@
 
-## Admin Dashboard & Usage Tracking System
+# Fix Model Policy: Delete Error + Global Enforcement
 
-### Goal Summary
+## Problem Analysis
 
-Add a two-tier user system:
-- **Admin users** — see a new admin dashboard showing all users' rooms and agents across the platform
-- **Regular users** — experience zero change from today; their data is synced to the database silently in the background
+### Bug 1: DELETE request fails silently
+In `AdminPage.tsx`, the `toggleModel` function calls `fetch` with `DELETE` but never checks if the response was successful before updating local state. When you try to disable/un-allow a model, the `DELETE` call to the edge function receives no error handling (the network log shows `Error: Failed to fetch`). Meanwhile the local React state still removes the item, causing a desync on the next render. The fix needs to:
+- Add proper error checking (`if (!res.ok) throw new Error(...)`) to the DELETE branch, mirroring what's already done in the POST branch.
+- Re-fetch (or restore) the policy from the server after any failure so state is consistent.
 
-No conversation content (messages) is ever stored in the database. Only structural metadata: room titles/goals, agent names/roles/providers, and skill names.
+### Bug 2: Policy not enforced everywhere
+Policy enforcement via `filterModelsByPolicy` is only implemented inside `AgentEditor` in `AgentsPage.tsx`. Three other model pickers are **unconstrained**:
 
----
+1. **RoomView summarizer popover** (`src/pages/RoomView.tsx`, ~line 1261) — defines its own `PROVIDER_DEFAULT_MODELS` array and renders all models with no policy check. It also doesn't fetch the policy or know about the user's admin status.
 
-### Architecture Overview
+2. **PersonaGenerator — Lovable models** (`src/pages/AgentsPage.tsx`, ~line 869) — renders `LOVABLE_MODELS` without filtering, even though the policy may restrict some Lovable models.
 
-```text
-Database (new tables)
-├── user_roles          — maps user_id → 'admin' | 'user'
-├── room_snapshots      — per-user room metadata (title, goal, agentIds, orchestration, createdAt)
-└── agent_snapshots     — per-user agent metadata (name, role, domain, provider, model, createdAt)
-    (NO skill_snapshots — skills are built-in/imported locally, lower value for analytics)
+3. **PersonaGenerator — non-Lovable providers** (`src/pages/AgentsPage.tsx`, ~line 875) — renders a free-text `<Input>` for non-Lovable providers, bypassing preset restrictions entirely. Should use a filtered dropdown like `AgentEditor` does.
 
-RLS policies
-├── room_snapshots: user can INSERT/UPDATE/DELETE their own rows; admin can SELECT all
-├── agent_snapshots: same pattern
-└── user_roles: users can only read their own role; only server-side (service role) can write
+## Solution
 
-Security helper
-└── has_role(user_id, role) — security definer function (prevents RLS recursion)
+### File 1: `src/pages/AdminPage.tsx` — Fix the DELETE error
+
+In the `toggleModel` function, add error checking after the DELETE fetch call (mirrors the POST pattern):
+
+```typescript
+// BEFORE (broken — no error check):
+await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
+  method: 'DELETE',
+  ...
+});
+setModelPolicy(prev => prev.filter(...)); // runs even on failure
+
+// AFTER (fixed):
+const res = await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
+  method: 'DELETE',
+  ...
+});
+if (!res.ok) {
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error ?? 'Failed to remove model from policy');
+}
+setModelPolicy(prev => prev.filter(...)); // only runs on success
 ```
 
----
+### File 2: `src/pages/RoomView.tsx` — Enforce policy on summarizer model selector
 
-### What Gets Synced & When
+**Changes needed:**
+1. Import `fetchModelPolicy`, `filterModelsByPolicy` from `@/lib/modelPolicy`.
+2. Import `useAdminRole` from `@/lib/useAdminRole`.
+3. Add state: `const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([])`.
+4. Add a `useEffect` that loads the policy once on mount using `fetchModelPolicy()`.
+5. In the summarizer popover (around line 1262), filter `PROVIDER_DEFAULT_MODELS[provider]` through `filterModelsByPolicy` before rendering — admins bypass the filter.
 
-| Event | Data synced | What is NOT stored |
-|---|---|---|
-| User creates a room | title, goal, orchestration, agentIds count | conversation messages |
-| User opens a room | last_opened_at updated (upsert) | message contents |
-| User saves an agent | name, role, domain, provider, model | system prompts, API keys |
-| User creates a skill | name, category, description | skill step code |
+The `PROVIDER_DEFAULT_MODELS` object in RoomView will be filtered per-provider using the same utility already used in `AgentEditor`.
 
-All syncing is **fire-and-forget** — it never blocks the UI. If it fails silently (e.g. network down), the user experience is unaffected.
+### File 3: `src/pages/AgentsPage.tsx` — Enforce policy in PersonaGenerator
 
----
+**Changes needed in `PersonaGenerator`:**
+1. Pass `policy` and `isAdmin` as props to `PersonaGenerator` (or fetch them inside the component — fetching inside is cleaner since it already fetches other state).
+2. Actually, the cleanest approach: accept `policy: AllowedModel[]` and `isAdmin: boolean` as props from `AgentsPage`, which already has these available in its scope.
+3. For the **Lovable model selector**: wrap `LOVABLE_MODELS` with `filterModelsByPolicy('lovable', LOVABLE_MODELS, policy)` (admins bypass).
+4. For the **non-Lovable provider selector**: replace the free-text `<Input>` with a filtered `<Select>` using `PROVIDER_PRESET_MODELS[provider]` filtered through the policy, falling back to the text input only for ollama/custom. This matches the behavior in `AgentEditor`.
 
-### Files to Create / Modify
+## Implementation Steps
 
-**Database migrations (2 new files)**
+### Step 1 — Fix `AdminPage.tsx`
+- In `toggleModel`, add `res` variable for the DELETE fetch, then check `res.ok` before updating state.
 
-1. `supabase/migrations/..._user_roles.sql`
-   - `app_role` enum: `'admin' | 'user'`
-   - `user_roles` table with RLS: users read own row, no direct writes
-   - `has_role(user_id, role)` security definer function
+### Step 2 — Fix `RoomView.tsx`
+- Add imports for `fetchModelPolicy`, `filterModelsByPolicy`, `AllowedModel`, `useAdminRole`.
+- Add `modelPolicy` state and a mount effect to hydrate it.
+- In the summarizer popover's model `<Select>`, apply `filterModelsByPolicy` on `modelOptions` before rendering if the user is not an admin.
 
-2. `supabase/migrations/..._usage_tracking.sql`
-   - `room_snapshots` table: `id, user_id, room_id (text), title, goal, orchestration, agent_count, created_at, last_opened_at, updated_at`
-   - `agent_snapshots` table: `id, user_id, agent_id (text), name, role, domain, provider, model, created_at, updated_at`
-   - RLS: users manage their own rows; admins (via `has_role`) can SELECT all rows
+### Step 3 — Fix `AgentsPage.tsx` (PersonaGenerator)
+- Add `policy` and `isAdmin` props to `PersonaGenerator`.
+- Pass the already-available `policy` and `isAdmin` values when rendering `<PersonaGenerator>`.
+- Filter `LOVABLE_MODELS` through `filterModelsByPolicy` in the Lovable model dropdown.
+- Replace the non-Lovable free-text input with a filtered preset dropdown (using `PROVIDER_PRESET_MODELS`), keeping the raw input only for `ollama` and `custom` providers.
 
-**New file: `src/lib/usageSync.ts`**
+## Summary of Changes
 
-A lightweight module with fire-and-forget functions:
-- `syncRoom(room: Room): void` — upserts a row in `room_snapshots`
-- `syncAgent(agent: Agent): void` — upserts a row in `agent_snapshots`
-- Both check for an active Supabase session before attempting to sync; silently no-op if not authenticated or no Supabase config
+```text
+src/pages/AdminPage.tsx
+  - toggleModel(): add error check on DELETE response
 
-**New file: `src/lib/useAdminRole.ts`** (React hook)
+src/pages/RoomView.tsx
+  - Add imports: fetchModelPolicy, filterModelsByPolicy, AllowedModel, useAdminRole
+  - Add modelPolicy state + useEffect to fetch on mount
+  - Filter summarizer model options by policy (non-admins)
 
-- Queries `user_roles` for the current user's role on mount
-- Returns `{ isAdmin: boolean; loading: boolean }`
+src/pages/AgentsPage.tsx
+  - PersonaGenerator: add policy + isAdmin props
+  - Filter LOVABLE_MODELS in Lovable model selector
+  - Replace non-Lovable free text input with filtered preset Select dropdown
+  - Pass policy + isAdmin when rendering <PersonaGenerator>
+```
 
-**Modified: `src/pages/Dashboard.tsx`**
-
-- Call `syncRoom(room)` after `upsertRoom()` in `CreateRoomDialog`
-- Call `syncRoom(room)` when a room card is clicked (open event — updates `last_opened_at`)
-
-**Modified: `src/pages/AgentsPage.tsx`**
-
-- Call `syncAgent(agent)` after `upsertAgent()` in `handleSave`
-
-**Modified: `src/pages/SkillsPage.tsx`**
-
-- Call `syncSkill(skill)` after `upsertSkill()` in `handleWizardSave` and `handleInstall` (optional, lower priority)
-
-**New file: `src/pages/AdminPage.tsx`**
-
-A new page (only visible/accessible to admin users) with:
-- A table of all users' rooms: columns = User email, Room title, Goal (truncated), Agents count, Orchestration, Created, Last opened
-- A table of all users' agents: columns = User email, Agent name, Role, Domain, Provider/Model, Created
-- Filter by user (dropdown of all user emails)
-- Simple date range filter
-- No links into the actual rooms (just metadata)
-
-**Modified: `src/App.tsx`**
-
-- Add route `/admin` → `<AdminPage />`
-- Wrap it in `<ProtectedRoute>` + an additional `AdminRoute` guard that checks `isAdmin`
-
-**Modified: `src/components/AppLayout.tsx`**
-
-- Add "Admin" nav item (with a `ShieldCheck` icon) that only renders when `isAdmin === true`
-- Uses `useAdminRole` hook to conditionally show the link
-
----
-
-### Security Design
-
-- `has_role()` is a `SECURITY DEFINER` function — it bypasses RLS to check the `user_roles` table without recursion
-- Admins are assigned by manually inserting into `user_roles` via the backend SQL editor (or a one-time migration that seeds the first admin by email)
-- The `AdminPage` component additionally checks `isAdmin` client-side and redirects non-admins to `/`
-- API keys, system prompts, message content, and inner thoughts are **never stored** in any database table
-
----
-
-### What Regular Users See
-
-Absolutely nothing changes. The sync calls are invisible background operations. The admin nav item does not appear for non-admin users.
-
----
-
-### Technical Notes
-
-- `room_snapshots.room_id` stores the localStorage UUID as a `text` column (not a foreign key — rooms live in localStorage, not the DB)
-- `agent_snapshots.agent_id` similarly stores the local UUID as `text`
-- Upserts use `ON CONFLICT (user_id, room_id)` / `ON CONFLICT (user_id, agent_id)` to avoid duplicates
-- The admin email for the initial seed will be asked to the user before the migration runs
-
+No database migrations, no new edge functions, and no new secrets are needed — this is purely a frontend enforcement fix.
