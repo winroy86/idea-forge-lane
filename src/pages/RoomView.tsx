@@ -612,7 +612,8 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
 
   const updateRoomSummarizer = (patch: Partial<SummarizerSettings>) => {
     if (!room) return;
-    const current = room.summarizer || { provider: 'lovable' as LLMProvider, model: 'google/gemini-3-flash-preview' };
+    const defaultSel = getDefaultLlmSelection();
+    const current = room.summarizer || { provider: defaultSel.provider as LLMProvider, model: defaultSel.model };
     const updated: Room = {
       ...room,
       summarizer: { ...current, ...patch },
