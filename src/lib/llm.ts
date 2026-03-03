@@ -102,7 +102,35 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
     const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
     if (memoryContext) prompt += memoryContext;
   }
-  prompt += `\nKeep your responses concise and focused. You are participating in a multi-agent brainstorming session.`;
+  // Work style directive
+  const workStyle = agent.workStyle || 'proactive';
+  if (workStyle === 'proactive') {
+    prompt += `\n\nYou are an autonomous expert. Do NOT just agree or suggest what others should do.
+Instead:
+- Take ownership of problems — investigate, analyze, and deliver concrete findings
+- Break complex questions into sub-tasks and work through them systematically
+- Provide evidence, data, calculations, or code — not just opinions
+- Challenge assumptions and present alternative viewpoints with reasoning
+- When you lack information, use your tools (web search, code execution) to find answers
+- End with specific, actionable next steps YOU will take, not vague recommendations
+- Never say "we should consider" — instead say "I will do X" or "Here is what I found"`;
+  } else if (workStyle === 'critical') {
+    prompt += `\n\nYou are a rigorous critical analyst. Your role is to stress-test ideas and find weaknesses.
+- Challenge every assumption — demand evidence and reasoning
+- Play devil's advocate: argue the strongest counter-position, even if you agree
+- Identify risks, edge cases, and failure modes others miss
+- Rate confidence levels on claims (high/medium/low) with justification
+- When others agree too quickly, push back and explore alternatives
+- Provide your own analysis with evidence, not just criticism`;
+  } else {
+    prompt += `\n\nYou are a collaborative team member who builds on others' ideas.
+- Listen carefully and synthesize different viewpoints into stronger proposals
+- Add concrete details, examples, and evidence to evolving ideas
+- Identify connections between different perspectives
+- When you agree, explain WHY and add substance — never just say "I agree"
+- Propose specific improvements and refinements with reasoning`;
+  }
+
   return prompt;
 }
 
@@ -426,20 +454,33 @@ export async function callAgent(
 
 YOU ARE IN PRIVATE RESEARCH MODE (Step ${loop} of ${researchLoops} available research steps). No one can see this.
 
-=== STRATEGY PLANNING ===
+YOUR MISSION: Produce tangible, concrete outputs — not vague notes. Each step must deliver a specific artifact (analysis, verified fact, data, code result, or structured finding).
+
+=== TASK PLANNING ===
 You have exactly ${researchLoops} research step(s) total. You are currently on step ${loop}.
 ${researchLoops - loop} step(s) remain after this one.
 
-${loop === 1 ? `FIRST STEP: Start by defining a SHORT STRATEGY — a plan you can execute within ${researchLoops} step(s).
-- What are the key questions you need to answer?
-- How will you distribute your effort across the available steps?
-- If you only have 1 step, focus on the single most impactful thing.
-- If you have 2-3 steps, split between gathering info and synthesizing.
-- If you have 4-5 steps, you can do deeper exploration before synthesis.
+${loop === 1 ? `FIRST STEP: Decompose the problem into CONCRETE SUB-TASKS you will execute across your ${researchLoops} step(s).
 
-Write your strategy to short-term memory as "strategy.md" so you can track it.` : `Review your strategy from "strategy.md" and execute the next planned action.
+For each sub-task, define:
+1. What specific question or problem it addresses
+2. What tool or method you'll use (web search, code execution, analysis, reasoning)
+3. What the expected deliverable is (a finding, a data point, a code result, a verified claim)
+
+Allocate sub-tasks to steps:
+- 1 step: Do the single highest-impact investigation and deliver findings
+- 2-3 steps: Step 1 = investigate & gather evidence, Step 2 = analyze & verify, Step 3 = synthesize deliverable
+- 4-5 steps: Deep exploration → cross-reference → analyze → self-critique → final deliverable
+
+Write your task plan to short-term memory as "strategy.md".` : `Review your task plan from "strategy.md" and execute the next planned sub-task.
 Steps completed: ${loop - 1}/${researchLoops}. Steps remaining after this: ${researchLoops - loop}.
-${loop === researchLoops ? '⚠️ THIS IS YOUR FINAL RESEARCH STEP. Focus on consolidating findings.' : ''}`}
+
+${loop === researchLoops ? `⚠️ THIS IS YOUR FINAL RESEARCH STEP.
+REQUIRED: Before producing your final output, perform a SELF-CRITIQUE:
+- What gaps remain in your research?
+- What claims are you making without sufficient evidence?
+- What counter-arguments haven't you addressed?
+Then produce a STRUCTURED DELIVERABLE: a findings report with evidence, confidence levels, and specific recommendations.` : `REQUIRED OUTPUT for this step: At least one concrete artifact — a verified fact, a calculation result, an analysis with evidence, or a code output. Do NOT just write "I need to look into X" — actually do it.`}`}
 
 ${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
 
@@ -449,11 +490,11 @@ Use LONG-TERM memory sparingly — only for durable insights that will matter ac
 Do NOT dump everything into long-term memory. Be selective.
 
 INSTRUCTIONS:
-1. Review the conversation and your strategy
-2. Execute the next step of your plan
-3. Write findings to SHORT-TERM memory files (working notes for this task)
-${loop === researchLoops ? '4. Consolidate your key findings into a concise summary in short-term memory' : ''}
-${toolsEnabled.includes('web_search') ? `${loop === researchLoops ? '5' : '4'}. Use web search if you need current information` : ''}
+1. Review the conversation and your task plan
+2. Execute the current sub-task — produce a TANGIBLE OUTPUT (not just notes about what you plan to do)
+3. Write concrete findings to SHORT-TERM memory files (include evidence, data, sources)
+${loop === researchLoops ? '4. Perform self-critique, then consolidate into a structured findings report in short-term memory' : ''}
+${toolsEnabled.includes('web_search') ? `${loop === researchLoops ? '5' : '4'}. Use web search to verify claims and gather current data — don't just theorize` : ''}
 
 OUTPUT FORMAT - respond with structured actions:
 THINK: [your reasoning about what to do in this step]
@@ -564,7 +605,7 @@ Be honest and analytical in your thinking. This is your private space.`;
         ...history,
         {
           role: 'user' as const,
-          content: `[PRIVATE CONTEXT — do NOT repeat or reference this in your reply]\n${innerThoughts}\n[END PRIVATE CONTEXT]\n\nNow write your PUBLIC response to the group. This is what everyone will see. Be direct and concise — just state your actual answer or contribution. Do NOT mention "private analysis", "inner thoughts", or any meta-commentary about your reasoning process. Simply respond as ${agent.name}.`,
+          content: `[PRIVATE CONTEXT — do NOT repeat or reference this in your reply]\n${innerThoughts}\n[END PRIVATE CONTEXT]\n\nNow write your PUBLIC response to the group. This is what everyone will see.\n\nRULES FOR YOUR RESPONSE:\n- Lead with your concrete findings, analysis, or deliverables — not a restatement of the question\n- Back claims with evidence, data, or sources from your research\n- Take a clear position with reasoning — do not hedge with "it depends" or "we should consider"\n- Include specific action items or deliverables, not vague suggestions\n- If you executed code or ran searches, show the key results\n- If you disagree with others, explain WHY with evidence\n- Do NOT mention "private analysis", "inner thoughts", or any meta-commentary about your reasoning process\n\nSimply respond as ${agent.name} with substance and conviction.`,
         },
       ]
     : history;

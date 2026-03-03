@@ -24,6 +24,8 @@ export interface McpServerConfig {
   authHeader?: string; // custom header name for api-key auth (default: 'Authorization')
 }
 
+export type AgentWorkStyle = 'proactive' | 'collaborative' | 'critical';
+
 export interface Agent {
   id: string;
   name: string;
@@ -37,6 +39,7 @@ export interface Agent {
   memoryEnabled: boolean;
   researchLoops: number; // 0-5, number of private research iterations before public response
   memoryScopeDefault: 'global' | 'local' | 'both';
+  workStyle?: AgentWorkStyle; // proactive (default), collaborative, or critical
   skills: string[];
   mcpServers: McpServerConfig[];
   permissions: {
