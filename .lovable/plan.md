@@ -1,60 +1,69 @@
 
 
-# Room UI Redesign — Mockup-Inspired "Pare" Look
+# Memory & Prompt Optimization Plan
 
-## What the mockup shows
+## Problems Identified
 
-The reference images depict a boardroom-style debate UI with these distinct characteristics:
+After reviewing `src/lib/llm.ts` and `src/lib/agentMemory.ts`, here are the root causes of agent degradation over time:
 
-1. **Header bar**: App name left, room title centered, pause/settings/leave-room buttons right. Clean, warm tones.
-2. **Left sidebar — Agents panel with Summary tab**: Two tabs ("Agents" / "Summary"). The Agents tab shows large circular avatar icons with colored backgrounds and role subtitles. The Summary tab shows a live orchestrator draft with meeting status, key points, and action items.
-3. **Meeting status bar**: "Round 2 of 5 · Time Remaining: 02:30" with "Next Argument: [agent] is currently constructing an argument..." status text.
-4. **Chat area**: Warm cream/beige background. Agent messages appear as **colored speech bubbles** (green, brown/maroon, earth tones) with agent name above and timestamp to the right. Each bubble has high border-radius. User messages are styled differently (input bar says "Interact with the board...").
-5. **Bottom bar**: Input field with "Interact with the board..." placeholder + send button + "Call to Conclude" / "Pause Debate" action button.
-6. **Color palette**: Earth tones — warm cream background, olive/forest green bubbles, warm brown/maroon bubbles, muted stone sidebar. No harsh blues or purples.
+1. **Memory bloat in context window**: `getMemorySummaryForPrompt` dumps ALL memory files' full content into the system prompt. After a few rounds, this can consume 10-20K tokens of context, leaving little room for actual reasoning.
+
+2. **Research loop token cap too low (1500)**: Line 531 caps research loop output at 1500 tokens. Agents can't produce substantive analysis in that budget, leading to shallow "I'll look into X" outputs instead of real findings.
+
+3. **No conversation history pruning**: `buildChatMessages` sends ALL messages. After 10+ exchanges, the history alone can exceed the context window, pushing out the system prompt and memories.
+
+4. **Redundant inner-thoughts pass after research**: After completing research loops (which already produce private analysis), there's a SECOND "thinking" pass (lines 591-613) that wastes tokens repeating what was already analyzed.
+
+5. **Memory injected twice in research loops**: The base `system` prompt already includes memories (via `buildSystemMessage` line 103), then the research prompt injects them AGAIN at line 486. Double the tokens for the same content.
+
+6. **Long-term summary grows unbounded**: The `running-summary.md` just appends text, keeping stale content from early conversations at the top while newer, more relevant content gets truncated.
+
+7. **No relevance filtering**: All memories are injected regardless of whether they relate to the current topic. An agent researching "EV markets" gets memories about a previous "blockchain" conversation too.
 
 ## Plan
 
-### 1. Update color palette (warm earth tones)
-**File**: `src/index.css`
-- Change agent colors to earth tones: olive green, warm brown, terracotta, dusty gold, sage, slate
-- Adjust chat background to warm cream (`40 30% 96%`)
-- Keep sidebar warm stone tones (already close)
+### 1. Smart memory injection with budget and relevance (`src/lib/agentMemory.ts`)
 
-### 2. Restructure Room layout to match mockup
-**File**: `src/pages/RoomView.tsx`
+- Add a `MEMORY_TOKEN_BUDGET` constant (default 2000 chars ~500 tokens)
+- New function `getCompactMemorySummary(agentId, roomId, currentTopic?)` that:
+  - Prioritizes room-local memories over global
+  - Prioritizes research > long-term > short-term
+  - For each memory file, includes only the first 300 chars + a "..." truncation marker
+  - Stops adding memories when the budget is reached
+  - Optionally filters by simple keyword overlap with `currentTopic`
 
-**Header**: 
-- Move room title to center. Add "Leave Room" button (navigates back). Add pause/settings icon buttons right-aligned.
-- Remove orchestration dropdown from header (move to settings or keep as popover).
+### 2. Conversation history sliding window (`src/lib/llm.ts`)
 
-**Left sidebar (Agents + Summary)**:
-- Move agent roster from right panel to a **left sidebar** with two tabs: "Agents" and "Summary".
-- Agents tab: Large circular avatars (48-56px) with name and role subtitle below. Styled like the mockup with colored icon backgrounds.
-- Summary tab: Shows a live meeting summary draft area (auto-saving text) with current orchestrator notes — objective, key conflict, point summaries, status, action items.
+- In `buildChatMessages`, keep only the last N messages (e.g., 20) plus always include the first 2 messages (for context setup)
+- Add a `MAX_HISTORY_MESSAGES = 20` constant
+- This prevents context window overflow in long conversations
 
-**Meeting status bar** (between header and chat):
-- Show "Round X of Y · Time Remaining: MM:SS" prominently centered.
-- Below it: "Next Argument: [agent] is currently constructing an argument..." when an agent is loading.
+### 3. Increase research loop token cap (`src/lib/llm.ts`)
 
-**Chat area**:
-- Warm cream background.
-- Agent bubbles: Large rounded corners (`rounded-2xl`), colored backgrounds matching agent's earth-tone color. Agent name displayed above the bubble, timestamp to the right.
-- User messages: Right-aligned, neutral dark bubble.
+- Change line 531 from `maxTokens: Math.min(agent.config.maxTokens, 1500)` to `Math.min(agent.config.maxTokens, 3000)`
+- Gives agents enough room to produce real analysis in each research step
 
-**Bottom input bar**:
-- Placeholder: "Interact with the board..."
-- Add a "Call to Conclude" / "Pause Debate" button next to the send button (maps to existing end-meeting / summarize functionality).
+### 4. Skip redundant thinking pass when research loops ran (`src/lib/llm.ts`)
 
-### 3. Relocate right panel contents
-- Documents, Tasks, Past Meetings, Balance slider → move into the Summary tab or a collapsible section within the left sidebar.
-- Keep the Sheet (mobile drawer) for overflow controls.
+- When `researchLoops > 0`, skip the "Pass 1: Inner reasoning" block (lines 591-613) entirely
+- The research loops already produced thorough private analysis — doing it twice wastes 1000+ tokens and dilutes focus
 
-### 4. Files to modify
-- `src/index.css` — earth-tone agent colors
-- `src/pages/RoomView.tsx` — full layout restructure (header, left sidebar with tabs, chat area styling, bottom bar, meeting status bar)
+### 5. Fix double memory injection in research loops (`src/lib/llm.ts`)
 
-### Technical details
+- Remove the memory injection from the research `researchSystem` prompt (line 486) since it's already in the base `system` prompt from `buildSystemMessage`
+- OR: remove it from `buildSystemMessage` during research mode and only inject the freshest version in each loop iteration (preferred — ensures each loop sees updated memories)
 
-The restructure keeps all existing state management and logic intact. Only the JSX layout and Tailwind classes change. The left sidebar will use the existing `Tabs` component from shadcn. The "Summary" tab content will be a `<Textarea>` bound to a new `summaryDraft` state (persisted in room metadata). The "Round X of Y" display maps to the existing `autoRoundCount`/`maxAutoRounds` state. The "Next Argument" status maps to `loadingAgentId`. Agent colors in `index.css` will shift to HSL values in the green/brown/terracotta range.
+### 6. Smarter long-term memory consolidation (`src/lib/llm.ts`)
+
+- Replace the append-only `running-summary.md` strategy (lines 710-728) with a rolling window: keep only the last 3 update blocks instead of trimming by character count
+- This ensures the most recent and relevant context is preserved
+
+### 7. Stronger "don't quit" directive in research prompts (`src/lib/llm.ts`)
+
+- Add explicit anti-patterns to the research loop prompt: "Do NOT end with 'I'll investigate further' or 'More research needed' — deliver what you have NOW"
+- Add to the final response prompt: "Do NOT say 'I have completed my analysis' — instead present your findings directly"
+
+### Files to modify
+- `src/lib/agentMemory.ts` — add compact memory summary with budget
+- `src/lib/llm.ts` — history pruning, skip redundant thinking pass, fix double injection, increase research token cap, better prompts, smarter consolidation
 
