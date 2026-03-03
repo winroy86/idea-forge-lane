@@ -168,6 +168,26 @@ export interface AgentMemoryFile {
   updatedAt: string;
 }
 
+// ---- Agent Task Board ----
+
+export type AgentTaskStatus = 'todo' | 'in-progress' | 'done' | 'blocked';
+export type AgentTaskPriority = 'low' | 'medium' | 'high';
+
+export interface AgentTask {
+  id: string;
+  roomId: string;
+  title: string;
+  description: string;
+  status: AgentTaskStatus;
+  priority: AgentTaskPriority;
+  assigneeAgentId: string | null; // which agent owns this task
+  createdByAgentId: string; // which agent created it
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  deliverable?: string; // result/output when done
+}
+
 // ---- Skills System ----
 
 export type SkillToolHint = 'code_execution' | 'web_search' | 'memory_write' | 'memory_read' | 'mcp_call';
