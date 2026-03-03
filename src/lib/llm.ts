@@ -1,7 +1,7 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, SummarizerSettings, CodeBlockMeta, MeetingContext } from '@/types';
 import { parseAndApplyTaskActions, getTasksForRoom } from '@/lib/taskStore';
 import { getProviders } from '@/lib/store';
-import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
+import { getAgentMemories, writeMemoryFile, getCompactMemorySummary } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
 import { waitForProviderHydration } from '@/lib/providerHydration';
 import { getDefaultLlmSelection } from '@/lib/providerSelection';
@@ -98,9 +98,10 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
       prompt += `\n\nThe meeting ends in ${Math.round(meetingContext.timeRemainingMinutes)} minutes. Focus on summarizing your position and key takeaways rather than introducing new arguments.`;
     }
   }
-  // Inject agent memories if memory is enabled
+  // Inject agent memories if memory is enabled (budget-aware)
   if (agent.memoryEnabled) {
-    const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
+    const latestMsg = ''; // topic extracted later in callAgent
+    const memoryContext = getCompactMemorySummary(agent.id, roomId);
     if (memoryContext) prompt += memoryContext;
   }
   // Work style directive
@@ -142,11 +143,13 @@ function buildSystemMessageWithSkills(agent: Agent, documents: RoomDocument[] = 
   return prompt;
 }
 
+const MAX_HISTORY_MESSAGES = 20;
+
 function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext) {
   const latestUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content;
   const system = buildSystemMessageWithSkills(agent, documents, roomId, meetingContext, latestUserMsg);
   // Only include public content - inner thoughts are private and not shared
-  const history = messages.map(m => {
+  const allHistory = messages.map(m => {
     if (m.role === 'user') {
       return { role: 'user' as const, content: m.content };
     }
@@ -161,6 +164,15 @@ function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[]
     // Only share the public content, never the innerThoughts
     return { role: 'user' as const, content: `[${name} (${msgAgent?.role || ''})]: ${m.content}` };
   });
+
+  // Sliding window: keep first 2 messages (context setup) + last N messages
+  let history = allHistory;
+  if (allHistory.length > MAX_HISTORY_MESSAGES + 2) {
+    const first = allHistory.slice(0, 2);
+    const recent = allHistory.slice(-MAX_HISTORY_MESSAGES);
+    history = [...first, { role: 'user' as const, content: '[... earlier conversation omitted for brevity ...]' }, ...recent];
+  }
+
   return { system, history };
 }
 
@@ -450,7 +462,7 @@ export async function callAgent(
       completedLoops.push(currentDetail);
       onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: 'Researching...', completedLoops: [...completedLoops] });
 
-      const memoryContext = getMemorySummaryForPrompt(agent.id, roomId);
+      // Skip memory injection here — already in base system prompt via buildSystemMessage
       const researchSystem = `${system}
 
 YOU ARE IN PRIVATE RESEARCH MODE (Step ${loop} of ${researchLoops} available research steps). No one can see this.
@@ -483,7 +495,7 @@ REQUIRED: Before producing your final output, perform a SELF-CRITIQUE:
 - What counter-arguments haven't you addressed?
 Then produce a STRUCTURED DELIVERABLE: a findings report with evidence, confidence levels, and specific recommendations.` : `REQUIRED OUTPUT for this step: At least one concrete artifact — a verified fact, a calculation result, an analysis with evidence, or a code output. Do NOT just write "I need to look into X" — actually do it.`}`}
 
-${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
+${agent.memoryEnabled ? 'Your memories are included in the system prompt above — refer to them as needed.' : 'You have no memories yet.'}
 
 ${(() => { const tasks = roomId ? getTasksForRoom(roomId) : []; if (tasks.length === 0) return ''; const userTasks = tasks.filter(t => t.createdByAgentId === 'user' && t.status !== 'done'); const taskLines = tasks.map(t => `- [${t.status}] "${t.title}" (id: ${t.id}, priority: ${t.priority}${t.assigneeAgentId === agent.id ? ', assigned to YOU' : ''}${t.createdByAgentId === 'user' ? ', created by USER' : ''})`).join('\n'); let block = `=== CURRENT TASKS ===\n${taskLines}\nUpdate task status as you work on them using TASK_UPDATE.`; if (userTasks.length > 0) { block += `\n\n⚡ USER-CREATED TASKS: ${userTasks.length} task(s) were created by the user. These represent explicit requests — prioritize picking them up. If a user task is assigned to you or unassigned, claim it by updating its status to "in-progress" and work on it.`; } return block; })()}
 
@@ -498,6 +510,12 @@ INSTRUCTIONS:
 3. Write concrete findings to SHORT-TERM memory files (include evidence, data, sources)
 ${loop === researchLoops ? '4. Perform self-critique, then consolidate into a structured findings report in short-term memory' : ''}
 ${toolsEnabled.includes('web_search') ? `${loop === researchLoops ? '5' : '4'}. Use web search to verify claims and gather current data — don't just theorize` : ''}
+
+ANTI-PATTERNS — do NOT do these:
+- Do NOT end with "I'll investigate further" or "More research needed" — deliver what you have NOW
+- Do NOT write vague notes like "need to look into X" — actually do the looking
+- Do NOT defer work to future steps unless you genuinely need prior results first
+- Every step MUST produce a concrete artifact: a finding, data point, analysis, or verified claim
 
 OUTPUT FORMAT - respond with structured actions:
 THINK: [your reasoning about what to do in this step]
@@ -528,7 +546,7 @@ TASK_CREATE|Cross-reference competitor claims|Verify competitor feature claims a
 WRITE_MEMORY|local|strategy.md|short-term|## Research Strategy\n1. Identify key claims\n2. Verify with web search\n3. Synthesize findings
 WRITE_MEMORY|local|initial-findings.md|research|## First Pass Notes\n- Key point 1\n- Key point 2`;
 
-      const loopAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 1500) } };
+      const loopAgent = { ...agent, config: { ...agent.config, maxTokens: Math.min(agent.config.maxTokens, 3000) } };
       const loopResult = await callProviderRaw(loopAgent, researchSystem, history, toolsEnabled.length > 0 ? toolsEnabled : undefined);
       tokensUsed = (tokensUsed || 0) + (loopResult.tokensUsed || 0);
 
@@ -588,10 +606,9 @@ WRITE_MEMORY|local|initial-findings.md|research|## First Pass Notes\n- Key point
   }
 
   // --- Pass 1: Inner reasoning (chain of thought) ---
-  if (messages.length > 0 || documents.length > 0) {
-    const updatedMemoryContext = agent.memoryEnabled ? getMemorySummaryForPrompt(agent.id, roomId) : '';
+  // Skip when research loops already ran — they produced thorough private analysis
+  if (researchLoops === 0 && (messages.length > 0 || documents.length > 0)) {
     const thinkingSystem = `${system}
-${updatedMemoryContext}
 
 IMPORTANT: You are now in your PRIVATE THINKING mode. The other agents CANNOT see this.
 Analyze the conversation so far and any reference documents.
@@ -633,7 +650,7 @@ Be honest and analytical in your thinking. This is your private space.`;
         ...history,
         {
           role: 'user' as const,
-          content: `[PRIVATE CONTEXT — do NOT repeat or reference this in your reply]\n${innerThoughts}\n[END PRIVATE CONTEXT]\n\nNow write your PUBLIC response to the group. This is what everyone will see.\n\nRULES FOR YOUR RESPONSE:\n- Lead with your concrete findings, analysis, or deliverables — not a restatement of the question\n- Back claims with evidence, data, or sources from your research\n- Take a clear position with reasoning — do not hedge with "it depends" or "we should consider"\n- Include specific action items or deliverables, not vague suggestions\n- If you executed code or ran searches, show the key results\n- If you disagree with others, explain WHY with evidence\n- Do NOT mention "private analysis", "inner thoughts", or any meta-commentary about your reasoning process\n\nSimply respond as ${agent.name} with substance and conviction.`,
+          content: `[PRIVATE CONTEXT — do NOT repeat or reference this in your reply]\n${innerThoughts}\n[END PRIVATE CONTEXT]\n\nNow write your PUBLIC response to the group. This is what everyone will see.\n\nRULES FOR YOUR RESPONSE:\n- Lead with your concrete findings, analysis, or deliverables — not a restatement of the question\n- Back claims with evidence, data, or sources from your research\n- Take a clear position with reasoning — do not hedge with "it depends" or "we should consider"\n- Include specific action items or deliverables, not vague suggestions\n- If you executed code or ran searches, show the key results\n- If you disagree with others, explain WHY with evidence\n- Do NOT mention "private analysis", "inner thoughts", or any meta-commentary about your reasoning process\n- Do NOT end with "I'll investigate further", "More research needed", or "I have completed my analysis"\n- Do NOT say "we should consider" — instead deliver what you have NOW with conviction\n- Present findings DIRECTLY — no preamble about what you did, just the substance\n\nSimply respond as ${agent.name} with substance and conviction.`,
         },
       ]
     : history;
@@ -707,25 +724,27 @@ Be honest and analytical in your thinking. This is your private space.`;
     const shortTermContent = `## Response at ${new Date().toISOString()}\n**Topic:** ${messages[messages.length - 1]?.content?.slice(0, 100) || 'conversation'}\n**Key points from my response:** ${publicContent.slice(0, 500)}`;
     writeMemoryFile(agent.id, roomId, `response-${Date.now()}.md`, shortTermContent, 'short-term');
 
-    // 2. Auto-consolidate: update long-term memory with a running summary
+    // 2. Auto-consolidate: update long-term memory with a rolling summary (keep last 3 blocks)
     const existingLongTerm = getAgentMemories(agent.id, 'global')
       .filter(f => f.category === 'long-term' && f.filename === 'running-summary.md');
     const previousSummary = existingLongTerm.length > 0 ? existingLongTerm[0].content : '';
     
-    // Build a compact long-term update from recent short-term memories
-    const recentShortTerm = getAgentMemories(agent.id, roomId)
-      .filter(f => f.category === 'short-term' || f.category === 'research')
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .slice(0, 5)
-      .map(f => f.content.slice(0, 200))
-      .join('\n');
+    const newBlock = `### Update (${new Date().toISOString().slice(0, 16)})\n${publicContent.slice(0, 300)}`;
 
-    const updatedSummary = previousSummary
-      ? `${previousSummary.slice(0, 3000)}\n\n### Update (${new Date().toISOString().slice(0, 16)})\n${publicContent.slice(0, 300)}`
-      : `## ${agent.name} — Running Summary\n### ${new Date().toISOString().slice(0, 16)}\n${publicContent.slice(0, 500)}`;
+    let updatedSummary: string;
+    if (!previousSummary) {
+      updatedSummary = `## ${agent.name} — Running Summary\n${newBlock}`;
+    } else {
+      // Parse existing blocks and keep only the last 2 + add new one (= 3 total)
+      const blocks = previousSummary.split(/(?=### Update \()/).filter(b => b.trim());
+      // First block might be the header
+      const header = blocks[0]?.startsWith('## ') ? blocks.shift()! : `## ${agent.name} — Running Summary\n`;
+      const recentBlocks = blocks.slice(-2); // keep last 2
+      recentBlocks.push(newBlock);
+      updatedSummary = `${header.trim()}\n${recentBlocks.join('\n')}`;
+    }
 
-    // Keep long-term summary under size limit by trimming oldest entries
-    writeMemoryFile(agent.id, 'global', 'running-summary.md', updatedSummary.slice(0, 8000), 'long-term');
+    writeMemoryFile(agent.id, 'global', 'running-summary.md', updatedSummary.slice(0, 4000), 'long-term');
   }
 
   const latencyMs = Math.round(performance.now() - start);
