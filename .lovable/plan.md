@@ -1,70 +1,60 @@
 
 
-## Problem
+# Room UI Redesign — Mockup-Inspired "Pare" Look
 
-The agents currently behave passively: they agree, suggest what "should" be done, and give surface-level answers without actually doing investigative work. The root causes are:
+## What the mockup shows
 
-1. **Weak system prompts** -- the base prompt says "Keep your responses concise and focused. You are participating in a multi-agent brainstorming session." This encourages short, agreeable answers rather than deep autonomous work.
+The reference images depict a boardroom-style debate UI with these distinct characteristics:
 
-2. **Research loop prompts lack action bias** -- while research loops exist (steps 1-5), the prompts focus on memory writing and note-taking rather than proactive investigation, task decomposition, and delivering concrete artifacts.
-
-3. **No task/action framework** -- agents have no structured way to define tasks, track progress, or commit to deliverables. They just "think and write notes."
-
-4. **Public response prompt encourages brevity** -- "Be direct and concise" steers agents away from substantive, detailed contributions.
+1. **Header bar**: App name left, room title centered, pause/settings/leave-room buttons right. Clean, warm tones.
+2. **Left sidebar — Agents panel with Summary tab**: Two tabs ("Agents" / "Summary"). The Agents tab shows large circular avatar icons with colored backgrounds and role subtitles. The Summary tab shows a live orchestrator draft with meeting status, key points, and action items.
+3. **Meeting status bar**: "Round 2 of 5 · Time Remaining: 02:30" with "Next Argument: [agent] is currently constructing an argument..." status text.
+4. **Chat area**: Warm cream/beige background. Agent messages appear as **colored speech bubbles** (green, brown/maroon, earth tones) with agent name above and timestamp to the right. Each bubble has high border-radius. User messages are styled differently (input bar says "Interact with the board...").
+5. **Bottom bar**: Input field with "Interact with the board..." placeholder + send button + "Call to Conclude" / "Pause Debate" action button.
+6. **Color palette**: Earth tones — warm cream background, olive/forest green bubbles, warm brown/maroon bubbles, muted stone sidebar. No harsh blues or purples.
 
 ## Plan
 
-### 1. Overhaul base system prompt to enforce proactive behavior
+### 1. Update color palette (warm earth tones)
+**File**: `src/index.css`
+- Change agent colors to earth tones: olive green, warm brown, terracotta, dusty gold, sage, slate
+- Adjust chat background to warm cream (`40 30% 96%`)
+- Keep sidebar warm stone tones (already close)
 
-In `buildSystemMessage()` (src/lib/llm.ts ~line 105), replace the passive closing instruction with an agentic directive:
+### 2. Restructure Room layout to match mockup
+**File**: `src/pages/RoomView.tsx`
 
-```
-You are an autonomous expert. Do NOT just agree or suggest what others should do.
-Instead:
-- Take ownership of problems — investigate, analyze, and deliver concrete findings
-- Break complex questions into sub-tasks and work through them systematically
-- Provide evidence, data, calculations, or code — not just opinions
-- Challenge assumptions and present alternative viewpoints with reasoning
-- When you lack information, use your tools (web search, code execution) to find answers
-- End with specific, actionable next steps YOU will take, not vague recommendations
-```
+**Header**: 
+- Move room title to center. Add "Leave Room" button (navigates back). Add pause/settings icon buttons right-aligned.
+- Remove orchestration dropdown from header (move to settings or keep as popover).
 
-### 2. Enhance research loop prompts for deeper autonomous work
+**Left sidebar (Agents + Summary)**:
+- Move agent roster from right panel to a **left sidebar** with two tabs: "Agents" and "Summary".
+- Agents tab: Large circular avatars (48-56px) with name and role subtitle below. Styled like the mockup with colored icon backgrounds.
+- Summary tab: Shows a live meeting summary draft area (auto-saving text) with current orchestrator notes — objective, key conflict, point summaries, status, action items.
 
-In the research loop system prompt (lines 425-470), add:
+**Meeting status bar** (between header and chat):
+- Show "Round X of Y · Time Remaining: MM:SS" prominently centered.
+- Below it: "Next Argument: [agent] is currently constructing an argument..." when an agent is loading.
 
-- **Task decomposition**: Require agents to break the problem into concrete sub-tasks in step 1, not just a vague "strategy"
-- **Action-oriented steps**: Each loop should produce a tangible output (analysis, data, code result, verified fact) rather than just notes
-- **Self-critique**: Before final step, agents must evaluate what gaps remain and what they still need to verify
-- **Deliverable focus**: Final loop must produce a structured deliverable (findings report, recommendation with evidence, action plan with owners)
+**Chat area**:
+- Warm cream background.
+- Agent bubbles: Large rounded corners (`rounded-2xl`), colored backgrounds matching agent's earth-tone color. Agent name displayed above the bubble, timestamp to the right.
+- User messages: Right-aligned, neutral dark bubble.
 
-### 3. Upgrade public response prompt to demand substance
+**Bottom input bar**:
+- Placeholder: "Interact with the board..."
+- Add a "Call to Conclude" / "Pause Debate" button next to the send button (maps to existing end-meeting / summarize functionality).
 
-In the public response injection (line 567), change from "Be direct and concise" to requiring:
+### 3. Relocate right panel contents
+- Documents, Tasks, Past Meetings, Balance slider → move into the Summary tab or a collapsible section within the left sidebar.
+- Keep the Sheet (mobile drawer) for overflow controls.
 
-- Concrete findings from research (not restating what was discussed)
-- Evidence or sources backing claims
-- A clear position with reasoning, not hedged agreement
-- Specific action items or deliverables, not "we should consider..."
+### 4. Files to modify
+- `src/index.css` — earth-tone agent colors
+- `src/pages/RoomView.tsx` — full layout restructure (header, left sidebar with tabs, chat area styling, bottom bar, meeting status bar)
 
-### 4. Add "agent work style" field to Agent type
+### Technical details
 
-Add an optional `workStyle` field to the Agent interface (`src/types/index.ts`) with presets:
-- `proactive` (default for new agents) -- autonomous investigator, takes initiative
-- `collaborative` -- discussion-oriented, builds on others' ideas  
-- `critical` -- devil's advocate, challenges everything
-
-This gets injected into the system prompt to shape behavior. The AgentEditor gets a simple dropdown for this.
-
-### 5. Update AgentEditor with work style selector
-
-In `src/pages/AgentsPage.tsx`, add a "Work Style" dropdown in the agent configuration section with the three presets above, plus a tooltip explaining each mode.
-
-### Files changed
-
-| File | Change |
-|------|--------|
-| `src/types/index.ts` | Add `workStyle` field to `Agent` interface |
-| `src/lib/llm.ts` | Rewrite `buildSystemMessage` closing, research loop prompt, and public response prompt |
-| `src/pages/AgentsPage.tsx` | Add work style dropdown in AgentEditor |
+The restructure keeps all existing state management and logic intact. Only the JSX layout and Tailwind classes change. The left sidebar will use the existing `Tabs` component from shadcn. The "Summary" tab content will be a `<Textarea>` bound to a new `summaryDraft` state (persisted in room metadata). The "Round X of Y" display maps to the existing `autoRoundCount`/`maxAutoRounds` state. The "Next Argument" status maps to `loadingAgentId`. Agent colors in `index.css` will shift to HSL values in the green/brown/terracotta range.
 
