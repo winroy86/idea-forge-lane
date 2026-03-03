@@ -1,7 +1,17 @@
 import { useState } from 'react';
 import { AgentTask, AgentTaskStatus, Agent } from '@/types';
-import { updateTask, deleteTask } from '@/lib/taskStore';
-import { CheckCircle2, Circle, Clock, AlertTriangle, Trash2, ChevronDown, ChevronRight, Flag } from 'lucide-react';
+import { updateTask, deleteTask, addTask } from '@/lib/taskStore';
+import { CheckCircle2, Circle, Clock, AlertTriangle, Trash2, ChevronDown, ChevronRight, Flag, Plus, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const STATUS_CONFIG: Record<AgentTaskStatus, { label: string; icon: typeof Circle; color: string }> = {
   'todo': { label: 'To Do', icon: Circle, color: 'text-muted-foreground' },
@@ -19,6 +29,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 interface TaskBoardProps {
   tasks: AgentTask[];
   agents: Agent[];
+  roomId: string;
   onTasksChanged: () => void;
 }
 
@@ -78,8 +89,13 @@ function TaskCard({ task, agents, onChanged }: { task: AgentTask; agents: Agent[
   );
 }
 
-export default function TaskBoard({ tasks, agents, onTasksChanged }: TaskBoardProps) {
+export default function TaskBoard({ tasks, agents, roomId, onTasksChanged }: TaskBoardProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [showForm, setShowForm] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newPriority, setNewPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [newAssignee, setNewAssignee] = useState<string>('');
 
   const grouped: Record<AgentTaskStatus, AgentTask[]> = {
     'todo': [],
@@ -94,16 +110,97 @@ export default function TaskBoard({ tasks, agents, onTasksChanged }: TaskBoardPr
 
   const statuses: AgentTaskStatus[] = ['in-progress', 'todo', 'blocked', 'done'];
 
-  if (tasks.length === 0) {
-    return (
-      <div className="text-center py-4">
-        <p className="text-[10px] text-muted-foreground italic">No tasks yet. Agents will create tasks during research.</p>
-      </div>
-    );
-  }
+  const handleCreate = () => {
+    if (!newTitle.trim()) return;
+    const task: AgentTask = {
+      id: crypto.randomUUID(),
+      roomId,
+      title: newTitle.trim(),
+      description: newDesc.trim(),
+      status: 'todo',
+      priority: newPriority,
+      assigneeAgentId: newAssignee || null,
+      createdByAgentId: 'user',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    addTask(task);
+    setNewTitle('');
+    setNewDesc('');
+    setNewPriority('medium');
+    setNewAssignee('');
+    setShowForm(false);
+    onTasksChanged();
+  };
 
   return (
     <div className="space-y-2">
+      {/* Add Task Button / Form */}
+      {!showForm ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowForm(true)}
+          className="w-full text-[10px] h-7 gap-1"
+        >
+          <Plus className="h-3 w-3" /> Add Task
+        </Button>
+      ) : (
+        <div className="rounded-md border border-border p-2 bg-card space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">New Task</span>
+            <button onClick={() => setShowForm(false)} className="text-muted-foreground hover:text-foreground">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+          <Input
+            placeholder="Task title"
+            value={newTitle}
+            onChange={e => setNewTitle(e.target.value)}
+            className="h-7 text-[11px]"
+          />
+          <Textarea
+            placeholder="Description (optional)"
+            value={newDesc}
+            onChange={e => setNewDesc(e.target.value)}
+            className="text-[11px] min-h-[40px] resize-none"
+            rows={2}
+          />
+          <div className="flex gap-1.5">
+            <Select value={newPriority} onValueChange={(v) => setNewPriority(v as 'low' | 'medium' | 'high')}>
+              <SelectTrigger className="h-7 text-[10px] flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+              </SelectContent>
+            </Select>
+            {agents.length > 0 && (
+              <Select value={newAssignee} onValueChange={setNewAssignee}>
+                <SelectTrigger className="h-7 text-[10px] flex-1">
+                  <SelectValue placeholder="Assignee" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {agents.map(a => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <Button size="sm" onClick={handleCreate} disabled={!newTitle.trim()} className="w-full h-7 text-[10px]">
+            Create Task
+          </Button>
+        </div>
+      )}
+
+      {tasks.length === 0 && !showForm && (
+        <p className="text-[10px] text-muted-foreground italic text-center py-2">No tasks yet. Add one or let agents create them.</p>
+      )}
+
       {statuses.map(status => {
         const items = grouped[status];
         if (items.length === 0) return null;
