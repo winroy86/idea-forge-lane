@@ -1,99 +1,70 @@
 
-# Fix Model Policy: Delete Error + Global Enforcement
 
-## Problem Analysis
+## Problem
 
-### Bug 1: DELETE request fails silently
-In `AdminPage.tsx`, the `toggleModel` function calls `fetch` with `DELETE` but never checks if the response was successful before updating local state. When you try to disable/un-allow a model, the `DELETE` call to the edge function receives no error handling (the network log shows `Error: Failed to fetch`). Meanwhile the local React state still removes the item, causing a desync on the next render. The fix needs to:
-- Add proper error checking (`if (!res.ok) throw new Error(...)`) to the DELETE branch, mirroring what's already done in the POST branch.
-- Re-fetch (or restore) the policy from the server after any failure so state is consistent.
+The agents currently behave passively: they agree, suggest what "should" be done, and give surface-level answers without actually doing investigative work. The root causes are:
 
-### Bug 2: Policy not enforced everywhere
-Policy enforcement via `filterModelsByPolicy` is only implemented inside `AgentEditor` in `AgentsPage.tsx`. Three other model pickers are **unconstrained**:
+1. **Weak system prompts** -- the base prompt says "Keep your responses concise and focused. You are participating in a multi-agent brainstorming session." This encourages short, agreeable answers rather than deep autonomous work.
 
-1. **RoomView summarizer popover** (`src/pages/RoomView.tsx`, ~line 1261) — defines its own `PROVIDER_DEFAULT_MODELS` array and renders all models with no policy check. It also doesn't fetch the policy or know about the user's admin status.
+2. **Research loop prompts lack action bias** -- while research loops exist (steps 1-5), the prompts focus on memory writing and note-taking rather than proactive investigation, task decomposition, and delivering concrete artifacts.
 
-2. **PersonaGenerator — Lovable models** (`src/pages/AgentsPage.tsx`, ~line 869) — renders `LOVABLE_MODELS` without filtering, even though the policy may restrict some Lovable models.
+3. **No task/action framework** -- agents have no structured way to define tasks, track progress, or commit to deliverables. They just "think and write notes."
 
-3. **PersonaGenerator — non-Lovable providers** (`src/pages/AgentsPage.tsx`, ~line 875) — renders a free-text `<Input>` for non-Lovable providers, bypassing preset restrictions entirely. Should use a filtered dropdown like `AgentEditor` does.
+4. **Public response prompt encourages brevity** -- "Be direct and concise" steers agents away from substantive, detailed contributions.
 
-## Solution
+## Plan
 
-### File 1: `src/pages/AdminPage.tsx` — Fix the DELETE error
+### 1. Overhaul base system prompt to enforce proactive behavior
 
-In the `toggleModel` function, add error checking after the DELETE fetch call (mirrors the POST pattern):
+In `buildSystemMessage()` (src/lib/llm.ts ~line 105), replace the passive closing instruction with an agentic directive:
 
-```typescript
-// BEFORE (broken — no error check):
-await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
-  method: 'DELETE',
-  ...
-});
-setModelPolicy(prev => prev.filter(...)); // runs even on failure
-
-// AFTER (fixed):
-const res = await fetch(`${supabaseUrl}/functions/v1/model-policy`, {
-  method: 'DELETE',
-  ...
-});
-if (!res.ok) {
-  const data = await res.json().catch(() => ({}));
-  throw new Error(data.error ?? 'Failed to remove model from policy');
-}
-setModelPolicy(prev => prev.filter(...)); // only runs on success
+```
+You are an autonomous expert. Do NOT just agree or suggest what others should do.
+Instead:
+- Take ownership of problems — investigate, analyze, and deliver concrete findings
+- Break complex questions into sub-tasks and work through them systematically
+- Provide evidence, data, calculations, or code — not just opinions
+- Challenge assumptions and present alternative viewpoints with reasoning
+- When you lack information, use your tools (web search, code execution) to find answers
+- End with specific, actionable next steps YOU will take, not vague recommendations
 ```
 
-### File 2: `src/pages/RoomView.tsx` — Enforce policy on summarizer model selector
+### 2. Enhance research loop prompts for deeper autonomous work
 
-**Changes needed:**
-1. Import `fetchModelPolicy`, `filterModelsByPolicy` from `@/lib/modelPolicy`.
-2. Import `useAdminRole` from `@/lib/useAdminRole`.
-3. Add state: `const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([])`.
-4. Add a `useEffect` that loads the policy once on mount using `fetchModelPolicy()`.
-5. In the summarizer popover (around line 1262), filter `PROVIDER_DEFAULT_MODELS[provider]` through `filterModelsByPolicy` before rendering — admins bypass the filter.
+In the research loop system prompt (lines 425-470), add:
 
-The `PROVIDER_DEFAULT_MODELS` object in RoomView will be filtered per-provider using the same utility already used in `AgentEditor`.
+- **Task decomposition**: Require agents to break the problem into concrete sub-tasks in step 1, not just a vague "strategy"
+- **Action-oriented steps**: Each loop should produce a tangible output (analysis, data, code result, verified fact) rather than just notes
+- **Self-critique**: Before final step, agents must evaluate what gaps remain and what they still need to verify
+- **Deliverable focus**: Final loop must produce a structured deliverable (findings report, recommendation with evidence, action plan with owners)
 
-### File 3: `src/pages/AgentsPage.tsx` — Enforce policy in PersonaGenerator
+### 3. Upgrade public response prompt to demand substance
 
-**Changes needed in `PersonaGenerator`:**
-1. Pass `policy` and `isAdmin` as props to `PersonaGenerator` (or fetch them inside the component — fetching inside is cleaner since it already fetches other state).
-2. Actually, the cleanest approach: accept `policy: AllowedModel[]` and `isAdmin: boolean` as props from `AgentsPage`, which already has these available in its scope.
-3. For the **Lovable model selector**: wrap `LOVABLE_MODELS` with `filterModelsByPolicy('lovable', LOVABLE_MODELS, policy)` (admins bypass).
-4. For the **non-Lovable provider selector**: replace the free-text `<Input>` with a filtered `<Select>` using `PROVIDER_PRESET_MODELS[provider]` filtered through the policy, falling back to the text input only for ollama/custom. This matches the behavior in `AgentEditor`.
+In the public response injection (line 567), change from "Be direct and concise" to requiring:
 
-## Implementation Steps
+- Concrete findings from research (not restating what was discussed)
+- Evidence or sources backing claims
+- A clear position with reasoning, not hedged agreement
+- Specific action items or deliverables, not "we should consider..."
 
-### Step 1 — Fix `AdminPage.tsx`
-- In `toggleModel`, add `res` variable for the DELETE fetch, then check `res.ok` before updating state.
+### 4. Add "agent work style" field to Agent type
 
-### Step 2 — Fix `RoomView.tsx`
-- Add imports for `fetchModelPolicy`, `filterModelsByPolicy`, `AllowedModel`, `useAdminRole`.
-- Add `modelPolicy` state and a mount effect to hydrate it.
-- In the summarizer popover's model `<Select>`, apply `filterModelsByPolicy` on `modelOptions` before rendering if the user is not an admin.
+Add an optional `workStyle` field to the Agent interface (`src/types/index.ts`) with presets:
+- `proactive` (default for new agents) -- autonomous investigator, takes initiative
+- `collaborative` -- discussion-oriented, builds on others' ideas  
+- `critical` -- devil's advocate, challenges everything
 
-### Step 3 — Fix `AgentsPage.tsx` (PersonaGenerator)
-- Add `policy` and `isAdmin` props to `PersonaGenerator`.
-- Pass the already-available `policy` and `isAdmin` values when rendering `<PersonaGenerator>`.
-- Filter `LOVABLE_MODELS` through `filterModelsByPolicy` in the Lovable model dropdown.
-- Replace the non-Lovable free-text input with a filtered preset dropdown (using `PROVIDER_PRESET_MODELS`), keeping the raw input only for `ollama` and `custom` providers.
+This gets injected into the system prompt to shape behavior. The AgentEditor gets a simple dropdown for this.
 
-## Summary of Changes
+### 5. Update AgentEditor with work style selector
 
-```text
-src/pages/AdminPage.tsx
-  - toggleModel(): add error check on DELETE response
+In `src/pages/AgentsPage.tsx`, add a "Work Style" dropdown in the agent configuration section with the three presets above, plus a tooltip explaining each mode.
 
-src/pages/RoomView.tsx
-  - Add imports: fetchModelPolicy, filterModelsByPolicy, AllowedModel, useAdminRole
-  - Add modelPolicy state + useEffect to fetch on mount
-  - Filter summarizer model options by policy (non-admins)
+### Files changed
 
-src/pages/AgentsPage.tsx
-  - PersonaGenerator: add policy + isAdmin props
-  - Filter LOVABLE_MODELS in Lovable model selector
-  - Replace non-Lovable free text input with filtered preset Select dropdown
-  - Pass policy + isAdmin when rendering <PersonaGenerator>
-```
+| File | Change |
+|------|--------|
+| `src/types/index.ts` | Add `workStyle` field to `Agent` interface |
+| `src/lib/llm.ts` | Rewrite `buildSystemMessage` closing, research loop prompt, and public response prompt |
+| `src/pages/AgentsPage.tsx` | Add work style dropdown in AgentEditor |
 
-No database migrations, no new edge functions, and no new secrets are needed — this is purely a frontend enforcement fix.
