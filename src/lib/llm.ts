@@ -98,10 +98,9 @@ function buildSystemMessage(agent: Agent, documents: RoomDocument[] = [], roomId
       prompt += `\n\nThe meeting ends in ${Math.round(meetingContext.timeRemainingMinutes)} minutes. Focus on summarizing your position and key takeaways rather than introducing new arguments.`;
     }
   }
-  // Inject agent memories if memory is enabled (budget-aware)
+  // Inject agent memories if memory is enabled (budget-aware, per-agent configurable)
   if (agent.memoryEnabled) {
-    const latestMsg = ''; // topic extracted later in callAgent
-    const memoryContext = getCompactMemorySummary(agent.id, roomId);
+    const memoryContext = getCompactMemorySummary(agent.id, roomId, undefined, agent.memoryTokenBudget);
     if (memoryContext) prompt += memoryContext;
   }
   // Work style directive
@@ -143,7 +142,7 @@ function buildSystemMessageWithSkills(agent: Agent, documents: RoomDocument[] = 
   return prompt;
 }
 
-const MAX_HISTORY_MESSAGES = 20;
+const DEFAULT_HISTORY_WINDOW = 20;
 
 function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[], documents: RoomDocument[] = [], roomId?: string, meetingContext?: MeetingContext) {
   const latestUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content;
@@ -166,10 +165,11 @@ function buildChatMessages(agent: Agent, messages: Message[], allAgents: Agent[]
   });
 
   // Sliding window: keep first 2 messages (context setup) + last N messages
+  const windowSize = agent.historyWindowSize || DEFAULT_HISTORY_WINDOW;
   let history = allHistory;
-  if (allHistory.length > MAX_HISTORY_MESSAGES + 2) {
+  if (allHistory.length > windowSize + 2) {
     const first = allHistory.slice(0, 2);
-    const recent = allHistory.slice(-MAX_HISTORY_MESSAGES);
+    const recent = allHistory.slice(-windowSize);
     history = [...first, { role: 'user' as const, content: '[... earlier conversation omitted for brevity ...]' }, ...recent];
   }
 
