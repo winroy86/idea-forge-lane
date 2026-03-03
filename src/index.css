@@ -54,12 +54,14 @@
     /* Custom tokens */
     --surface: 40 18% 99%;
     --surface-elevated: 0 0% 100%;
-    --agent-1: 210 60% 55%;
-    --agent-2: 340 55% 55%;
-    --agent-3: 160 45% 45%;
-    --agent-4: 270 45% 55%;
-    --agent-5: 30 65% 50%;
-    --agent-6: 190 50% 45%;
+    --agent-1: 142 35% 38%;
+    --agent-2: 15 45% 40%;
+    --agent-3: 25 55% 45%;
+    --agent-4: 45 50% 42%;
+    --agent-5: 160 30% 40%;
+    --agent-6: 200 15% 45%;
+    --room-cream: 40 30% 96%;
+    --room-cream-dark: 30 10% 12%;
     --shadow-soft: 0 0% 0% / 0.04;
     --shadow-medium: 0 0% 0% / 0.08;
     --chart-1: 198 93% 59%;
@@ -123,12 +125,12 @@
 
     --surface: 30 8% 10%;
     --surface-elevated: 30 8% 14%;
-    --agent-1: 210 60% 60%;
-    --agent-2: 340 55% 60%;
-    --agent-3: 160 45% 50%;
-    --agent-4: 270 45% 60%;
-    --agent-5: 30 65% 55%;
-    --agent-6: 190 50% 50%;
+    --agent-1: 142 35% 45%;
+    --agent-2: 15 45% 48%;
+    --agent-3: 25 55% 50%;
+    --agent-4: 45 50% 48%;
+    --agent-5: 160 30% 45%;
+    --agent-6: 200 15% 50%;
     --shadow-soft: 0 0% 0% / 0.2;
     --shadow-medium: 0 0% 0% / 0.3;
     --chart-1: 199 95% 73%;
