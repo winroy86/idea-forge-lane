@@ -1139,6 +1139,22 @@ export default function RoomView() {
           </div>
         )}
 
+        {/* ---- SUMMARIZER ACTIONS BAR ---- */}
+        <div className="border-t border-border px-4 py-1.5 flex items-center gap-1.5 overflow-x-auto" style={{ backgroundColor: 'hsl(var(--room-cream))' }}>
+          <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7 shrink-0" onClick={() => runSummarizer('summarize')} disabled={!!loadingAgentId || messages.length === 0}>
+            <FileText className="h-3 w-3" /> {loadingAgentId === 'summarizer' ? 'Working…' : 'Summarize'}
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7 shrink-0" onClick={() => runSummarizer('decisions')} disabled={!!loadingAgentId || messages.length === 0}>
+            <CheckSquare className="h-3 w-3" /> Decisions
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7 shrink-0" onClick={() => runSummarizer('actionPlan')} disabled={!!loadingAgentId || messages.length === 0}>
+            <ClipboardList className="h-3 w-3" /> Action Plan
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7 shrink-0" onClick={() => runSummarizer('updateMemory')} disabled={!!loadingAgentId || messages.length === 0}>
+            <Brain className="h-3 w-3" /> Update Memory
+          </Button>
+        </div>
+
         {/* ---- BOTTOM INPUT BAR ---- */}
         <div className="border-t border-border p-3" style={{ backgroundColor: 'hsl(var(--room-cream))' }}>
           <div className="flex gap-2 items-center">
@@ -1156,14 +1172,9 @@ export default function RoomView() {
             <Button onClick={sendUserMessage} size="icon" disabled={!input.trim()} className="shrink-0 h-9 w-9">
               <Send className="h-4 w-4" />
             </Button>
-            {/* Call to Conclude / Pause */}
-            {activeMeeting && activeMeeting.status !== 'ended' ? (
+            {activeMeeting && activeMeeting.status !== 'ended' && (
               <Button variant="outline" size="sm" className="gap-1 text-xs shrink-0 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={endMeetingEarly}>
                 <Square className="h-3 w-3" /> Conclude
-              </Button>
-            ) : (
-              <Button variant="outline" size="sm" className="gap-1 text-xs shrink-0" onClick={() => runSummarizer('summarize')} disabled={!!loadingAgentId || messages.length === 0}>
-                <FileText className="h-3 w-3" /> Summarize
               </Button>
             )}
           </div>
@@ -1211,6 +1222,33 @@ export default function RoomView() {
             {documents.length === 0 ? (<p className="text-[10px] text-muted-foreground italic">No documents loaded</p>) : (
               <div className="space-y-1">{documents.map(doc => (<div key={doc.id} className="flex items-center gap-1.5 text-[10px] group"><FileText className="h-3 w-3 text-muted-foreground shrink-0" /><span className="text-foreground truncate flex-1">{doc.name}</span><button onClick={() => removeDocument(doc.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"><X className="h-2.5 w-2.5" /></button></div>))}</div>
             )}
+          </div>
+          {/* Tasks in mobile sheet */}
+          <div className="border-t border-border p-3">
+            <button onClick={() => setShowTaskBoard(!showTaskBoard)} className="flex items-center gap-1.5 w-full text-left mb-1.5">
+              {showTaskBoard ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+              <ClipboardList className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Tasks {roomTasks.length > 0 ? `(${roomTasks.length})` : ''}</span>
+            </button>
+            {showTaskBoard && <TaskBoard tasks={roomTasks} agents={allAgents} roomId={id!} onTasksChanged={refreshTasks} />}
+          </div>
+          {/* Summarizer actions in mobile */}
+          <div className="border-t border-border p-3">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">Summarizer</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7" onClick={() => { runSummarizer('summarize'); setBubblePanelOpen(false); }} disabled={!!loadingAgentId || messages.length === 0}>
+                <FileText className="h-3 w-3" /> Summary
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7" onClick={() => { runSummarizer('decisions'); setBubblePanelOpen(false); }} disabled={!!loadingAgentId || messages.length === 0}>
+                <CheckSquare className="h-3 w-3" /> Decisions
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7" onClick={() => { runSummarizer('actionPlan'); setBubblePanelOpen(false); }} disabled={!!loadingAgentId || messages.length === 0}>
+                <ClipboardList className="h-3 w-3" /> Actions
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1 text-[10px] h-7" onClick={() => { runSummarizer('updateMemory'); setBubblePanelOpen(false); }} disabled={!!loadingAgentId || messages.length === 0}>
+                <Brain className="h-3 w-3" /> Memory
+              </Button>
+            </div>
           </div>
           <div className="border-t border-border p-3">
             <p className="text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">Balance</p>
