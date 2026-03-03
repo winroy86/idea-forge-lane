@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Download, Upload, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, Search, User, Server, RefreshCw, X, Code, Globe, Plug, Brain, Puzzle, ShieldAlert } from 'lucide-react';
-import { Agent, AgentConfig, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
+import { Agent, AgentConfig, AgentWorkStyle, LLMProvider, McpServerConfig, McpAuthType } from '@/types';
 import { getAgents, upsertAgent, deleteAgent, generateId, getProviders } from '@/lib/store';
 import { waitForProviderHydration } from '@/lib/providerHydration';
 import { getAgentMemories } from '@/lib/agentMemory';
@@ -335,6 +335,32 @@ function AgentEditor({ agent, onSave, onClose, policy, isAdmin }: { agent: Agent
               <Input value={form.config.baseUrl || ''} onChange={e => updateConfig({ baseUrl: e.target.value })} placeholder="http://localhost:11434" />
             </div>
           )}
+          <div className="mt-3">
+            <Label className="text-xs">Work Style</Label>
+            <p className="text-[10px] text-muted-foreground mb-1">Controls how the agent approaches problems and interacts with others</p>
+            <Select value={form.workStyle || 'proactive'} onValueChange={(v: AgentWorkStyle) => update({ workStyle: v })}>
+              <SelectTrigger className="h-8 text-xs mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="proactive">
+                  <div className="flex items-center gap-1.5">
+                    <span>🔬</span> Proactive — Autonomous investigator
+                  </div>
+                </SelectItem>
+                <SelectItem value="collaborative">
+                  <div className="flex items-center gap-1.5">
+                    <span>🤝</span> Collaborative — Builds on ideas
+                  </div>
+                </SelectItem>
+                <SelectItem value="critical">
+                  <div className="flex items-center gap-1.5">
+                    <span>⚔️</span> Critical — Devil's advocate
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="mt-3">
             <Label>Temperature: {form.config.temperature.toFixed(2)}</Label>
             <Slider value={[form.config.temperature]} onValueChange={([v]) => updateConfig({ temperature: v })} min={0} max={2} step={0.01} />
