@@ -1,4 +1,5 @@
 import { Agent, Message, ProviderConfig, RoomDocument, SummarizerAction, SummarizerSettings, CodeBlockMeta, MeetingContext } from '@/types';
+import { parseAndApplyTaskActions, getTasksForRoom } from '@/lib/taskStore';
 import { getProviders } from '@/lib/store';
 import { getAgentMemories, writeMemoryFile, getMemorySummaryForPrompt } from '@/lib/agentMemory';
 import { buildSkillsPromptBlock } from '@/lib/skillStore';
@@ -484,6 +485,8 @@ Then produce a STRUCTURED DELIVERABLE: a findings report with evidence, confiden
 
 ${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
 
+${(() => { const tasks = roomId ? getTasksForRoom(roomId) : []; return tasks.length > 0 ? `=== CURRENT TASKS ===\n${tasks.map(t => `- [${t.status}] "${t.title}" (id: ${t.id}, priority: ${t.priority}${t.assigneeAgentId === agent.id ? ', assigned to YOU' : ''})`).join('\n')}\nUpdate task status as you work on them using TASK_UPDATE.` : ''; })()}
+
 === MEMORY GUIDELINES ===
 Use SHORT-TERM memory for step-by-step working notes (auto-pruned, limited count).
 Use LONG-TERM memory sparingly — only for durable insights that will matter across conversations.
@@ -505,8 +508,23 @@ WRITE_MEMORY|[scope]|[filename]|[category]|[content]
   - content: markdown content to write
   NOTE: Do NOT write to long-term memory during research loops. That happens automatically after your response.
 
+TASK_CREATE|[title]|[description]|[priority]|[assignee_agent_id]
+  - title: Short task name (max 60 chars)
+  - description: What needs to be done
+  - priority: low, medium, or high
+  - assignee_agent_id: (optional) agent ID to assign to. Omit to self-assign.
+
+TASK_UPDATE|[task_id]|[new_status]|[deliverable]
+  - task_id: ID of the task to update
+  - new_status: todo, in-progress, done, or blocked
+  - deliverable: (optional) result text when marking done
+
+Create tasks to track your sub-tasks and mark them done as you complete them. This makes your work visible to the team.
+
 Example:
 THINK: Step 1 of 3 — I need to define my research strategy and start gathering key information.
+TASK_CREATE|Investigate market size data|Find reliable sources for market sizing|high
+TASK_CREATE|Cross-reference competitor claims|Verify competitor feature claims against documentation|medium
 WRITE_MEMORY|local|strategy.md|short-term|## Research Strategy\n1. Identify key claims\n2. Verify with web search\n3. Synthesize findings
 WRITE_MEMORY|local|initial-findings.md|research|## First Pass Notes\n- Key point 1\n- Key point 2`;
 
@@ -536,6 +554,16 @@ WRITE_MEMORY|local|initial-findings.md|research|## First Pass Notes\n- Key point
             currentDetail.filesWritten.push({ filename, scope: memScope, category });
             onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: `Writing ${filename}...`, completedLoops: [...completedLoops] });
             loopSummary += `📝 Wrote: ${filename} (${memScope}, ${category})\n`;
+          }
+        } else if (line.startsWith('TASK_CREATE|') || line.startsWith('TASK_UPDATE|')) {
+          const allAgentIds = allAgents.map(a => a.id);
+          const { tasksCreated, tasksUpdated } = parseAndApplyTaskActions(line, roomId || 'global', agent.id, allAgentIds);
+          for (const t of tasksCreated) {
+            loopSummary += `📋 Task created: "${t.title}" (${t.priority})\n`;
+            onLoopProgress?.({ currentLoop: loop, totalLoops: researchLoops, activity: `Created task: ${t.title}`, completedLoops: [...completedLoops] });
+          }
+          for (const tid of tasksUpdated) {
+            loopSummary += `✅ Task updated: ${tid}\n`;
           }
         }
       }

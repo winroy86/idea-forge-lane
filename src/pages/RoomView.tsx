@@ -7,7 +7,7 @@ import {
   ClipboardList, Brain, Settings2, X, ChevronRight, ChevronDown,
   Upload, Eye, EyeOff, Paperclip, Trash2, Database, Timer, Clock, Square, Menu
 } from 'lucide-react';
-import { Room, Agent, Message, OrchestrationType, SummarizerAction, SummarizerSettings, LLMProvider, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext } from '@/types';
+import { Room, Agent, Message, OrchestrationType, SummarizerAction, SummarizerSettings, LLMProvider, RoomDocument, CodeBlockMeta, MeetingSession, MeetingContext, AgentTask } from '@/types';
 import {
   getRoom, upsertRoom, getAgents, getMessages, addMessage, generateId,
   getMeetingSessions, saveMeetingSession, getActiveMeeting, getProviders,
@@ -19,6 +19,8 @@ import { getAgentMemories } from '@/lib/agentMemory';
 import AgentMemoryPanel from '@/components/AgentMemoryPanel';
 import ResearchProgressBar from '@/components/ResearchProgressBar';
 import CodeExecutionPanel from '@/components/CodeExecutionPanel';
+import TaskBoard from '@/components/TaskBoard';
+import { getTasksForRoom } from '@/lib/taskStore';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -186,9 +188,16 @@ export default function RoomView() {
   const { isAdmin } = useAdminRole();
   const [modelPolicy, setModelPolicy] = useState<AllowedModel[]>([]);
 
+  const [showTaskBoard, setShowTaskBoard] = useState(false);
+  const [roomTasks, setRoomTasks] = useState<AgentTask[]>([]);
+
   useEffect(() => {
     fetchModelPolicy(true).then(setModelPolicy).catch(() => {});
   }, []);
+
+  const refreshTasks = useCallback(() => {
+    if (id) setRoomTasks(getTasksForRoom(id));
+  }, [id]);
 
   // Meeting state
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
@@ -212,6 +221,7 @@ export default function RoomView() {
     const roomAgents = getAgents();
     setAllAgents(roomAgents);
     setMessages(getMessages(id));
+    refreshTasks();
     // Sync agents with their room context (fire-and-forget)
     const roomAgentIds = new Set(r.agentIds ?? []);
     roomAgents.filter(a => roomAgentIds.has(a.id)).forEach(a => syncAgent(a, id));
@@ -474,6 +484,7 @@ export default function RoomView() {
       };
       addMessage(msg);
       setMessages(prev => [...prev, msg]);
+      refreshTasks(); // Refresh tasks after agent response
 
       const others = roomAgents.filter(a => a.id !== agentId);
       if (others.length > 0) {
@@ -729,6 +740,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
         addMessage(msg);
         currentMessages = [...currentMessages, msg];
         setMessages([...currentMessages]);
+        refreshTasks();
 
         const completedRound = Math.floor((turn + 1) / roomAgents.length);
         setAutoRoundCount(completedRound);
@@ -1516,6 +1528,28 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Task Board */}
+          <div className="border-t border-border p-3">
+            <button
+              onClick={() => setShowTaskBoard(!showTaskBoard)}
+              className="flex items-center gap-1.5 w-full text-left mb-2"
+            >
+              {showTaskBoard ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+              <ClipboardList className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                Tasks {roomTasks.length > 0 ? `(${roomTasks.length})` : ''}
+              </span>
+              {roomTasks.filter(t => t.status === 'in-progress').length > 0 && (
+                <span className="text-[9px] bg-accent/15 text-accent rounded px-1 py-0.5 ml-auto">
+                  {roomTasks.filter(t => t.status === 'in-progress').length} active
+                </span>
+              )}
+            </button>
+            {showTaskBoard && (
+              <TaskBoard tasks={roomTasks} agents={allAgents} onTasksChanged={refreshTasks} />
             )}
           </div>
 
