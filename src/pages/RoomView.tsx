@@ -1549,7 +1549,7 @@ Draw on your persona, expertise, and memory. Be concise — this is your final s
               )}
             </button>
             {showTaskBoard && (
-              <TaskBoard tasks={roomTasks} agents={allAgents} onTasksChanged={refreshTasks} />
+              <TaskBoard tasks={roomTasks} agents={allAgents} roomId={id!} onTasksChanged={refreshTasks} />
             )}
           </div>
 

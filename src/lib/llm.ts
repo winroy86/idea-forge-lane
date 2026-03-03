@@ -485,7 +485,7 @@ Then produce a STRUCTURED DELIVERABLE: a findings report with evidence, confiden
 
 ${memoryContext ? `Your current memories:\n${memoryContext}` : 'You have no memories yet.'}
 
-${(() => { const tasks = roomId ? getTasksForRoom(roomId) : []; return tasks.length > 0 ? `=== CURRENT TASKS ===\n${tasks.map(t => `- [${t.status}] "${t.title}" (id: ${t.id}, priority: ${t.priority}${t.assigneeAgentId === agent.id ? ', assigned to YOU' : ''})`).join('\n')}\nUpdate task status as you work on them using TASK_UPDATE.` : ''; })()}
+${(() => { const tasks = roomId ? getTasksForRoom(roomId) : []; if (tasks.length === 0) return ''; const userTasks = tasks.filter(t => t.createdByAgentId === 'user' && t.status !== 'done'); const taskLines = tasks.map(t => `- [${t.status}] "${t.title}" (id: ${t.id}, priority: ${t.priority}${t.assigneeAgentId === agent.id ? ', assigned to YOU' : ''}${t.createdByAgentId === 'user' ? ', created by USER' : ''})`).join('\n'); let block = `=== CURRENT TASKS ===\n${taskLines}\nUpdate task status as you work on them using TASK_UPDATE.`; if (userTasks.length > 0) { block += `\n\n⚡ USER-CREATED TASKS: ${userTasks.length} task(s) were created by the user. These represent explicit requests — prioritize picking them up. If a user task is assigned to you or unassigned, claim it by updating its status to "in-progress" and work on it.`; } return block; })()}
 
 === MEMORY GUIDELINES ===
 Use SHORT-TERM memory for step-by-step working notes (auto-pruned, limited count).
