@@ -132,6 +132,7 @@ export function getCompactMemorySummary(
   agentId: string,
   roomId?: string,
   currentTopic?: string,
+  budgetOverride?: number,
 ): string {
   // Gather all relevant memories
   const memories = roomId
@@ -163,7 +164,7 @@ export function getCompactMemorySummary(
   });
 
   let summary = '\n\n--- YOUR MEMORY FILES ---\n';
-  let budget = MEMORY_TOKEN_BUDGET;
+  let budget = budgetOverride || MEMORY_TOKEN_BUDGET;
 
   for (const { file } of filtered) {
     if (budget <= 0) break;

@@ -428,6 +428,16 @@ function AgentEditor({ agent, onSave, onClose, policy, isAdmin }: { agent: Agent
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="mt-2">
+                  <Label className="text-xs">Memory Token Budget: {form.memoryTokenBudget || 2000} chars</Label>
+                  <p className="text-[10px] text-muted-foreground mb-1">Max characters injected from memory into prompts (~4 chars/token)</p>
+                  <Slider value={[form.memoryTokenBudget || 2000]} onValueChange={([v]) => update({ memoryTokenBudget: v })} min={500} max={8000} step={500} />
+                </div>
+                <div className="mt-2">
+                  <Label className="text-xs">History Window: {form.historyWindowSize || 20} messages</Label>
+                  <p className="text-[10px] text-muted-foreground mb-1">Max conversation messages sent to the model (plus first 2 for context)</p>
+                  <Slider value={[form.historyWindowSize || 20]} onValueChange={([v]) => update({ historyWindowSize: v })} min={5} max={50} step={5} />
+                </div>
               </>
             )}
 
@@ -1154,6 +1164,7 @@ export default function AgentsPage() {
         <AgentMemoryPanel
           agentId={memoryPanelAgent.id}
           agentName={memoryPanelAgent.name}
+          agent={memoryPanelAgent}
           onClose={() => { setMemoryPanelAgent(null); refresh(); }}
         />
       )}

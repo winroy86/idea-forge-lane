@@ -39,6 +39,8 @@ export interface Agent {
   memoryEnabled: boolean;
   researchLoops: number; // 0-5, number of private research iterations before public response
   memoryScopeDefault: 'global' | 'local' | 'both';
+  memoryTokenBudget?: number; // max chars for memory injection (~4 chars per token), default 2000
+  historyWindowSize?: number; // max messages in sliding window, default 20
   workStyle?: AgentWorkStyle; // proactive (default), collaborative, or critical
   skills: string[];
   mcpServers: McpServerConfig[];

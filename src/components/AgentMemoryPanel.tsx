@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
-import { X, Trash2, FileText, ChevronDown, ChevronRight, Database, Edit2, Save, Plus, Download, AlertTriangle } from 'lucide-react';
-import { AgentMemoryFile, MemoryCategory, MemoryScope } from '@/types';
-import { getAgentMemories, getMemoriesByScope, deleteMemoryFile, writeMemoryFile, deleteAgentMemories } from '@/lib/agentMemory';
+import { useState, useEffect, useMemo } from 'react';
+import { X, Trash2, FileText, ChevronDown, ChevronRight, Database, Edit2, Save, Plus, Download, AlertTriangle, BarChart3 } from 'lucide-react';
+import { Agent, AgentMemoryFile, MemoryCategory, MemoryScope } from '@/types';
+import { getAgentMemories, getMemoriesByScope, deleteMemoryFile, writeMemoryFile, deleteAgentMemories, getCompactMemorySummary } from '@/lib/agentMemory';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -36,14 +37,91 @@ const CATEGORY_COLORS: Record<MemoryCategory, string> = {
   'scratch': 'bg-muted text-muted-foreground border-border',
 };
 
+function ContextWindowIndicator({ agent, roomId }: { agent: Agent; roomId?: string }) {
+  const stats = useMemo(() => {
+    // System prompt size
+    const systemPromptBase = (agent.systemPrompt || `You are ${agent.name}, a ${agent.role}.`).length;
+    const domainLen = agent.domain ? agent.domain.length + 30 : 0;
+    const styleLen = agent.styleVoice ? agent.styleVoice.length + 30 : 0;
+    const workStyleLen = 400; // approximate work style directive
+    const systemPromptChars = systemPromptBase + domainLen + styleLen + workStyleLen;
+
+    // Memory injection size (what actually gets injected)
+    const memoryInjection = agent.memoryEnabled
+      ? getCompactMemorySummary(agent.id, roomId, undefined, agent.memoryTokenBudget).length
+      : 0;
+
+    const memoryBudget = agent.memoryTokenBudget || 2000;
+    const historyWindow = agent.historyWindowSize || 20;
+    // Estimate: avg message ~200 chars
+    const estimatedHistoryChars = historyWindow * 200;
+
+    const totalEstimated = systemPromptChars + memoryInjection + estimatedHistoryChars;
+    // Rough context limits by model type (chars, ~4 chars/token)
+    const contextLimitChars = (agent.config.maxTokens || 4096) * 4 * 4; // assume 4x output tokens for input
+
+    return {
+      systemPromptChars,
+      memoryInjection,
+      memoryBudget,
+      historyWindow,
+      estimatedHistoryChars,
+      totalEstimated,
+      contextLimitChars,
+    };
+  }, [agent, roomId]);
+
+  const segments = [
+    { label: 'System Prompt', chars: stats.systemPromptChars, color: 'bg-blue-500' },
+    { label: 'Memory', chars: stats.memoryInjection, color: 'bg-amber-500' },
+    { label: `History (~${stats.historyWindow} msgs)`, chars: stats.estimatedHistoryChars, color: 'bg-emerald-500' },
+  ];
+
+  const total = segments.reduce((s, seg) => s + seg.chars, 0);
+
+  return (
+    <div className="px-4 py-2 border-b border-border space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+        <BarChart3 className="h-3 w-3" />
+        Context Window Usage (estimated)
+      </div>
+      <div className="flex h-2 rounded-full overflow-hidden bg-muted">
+        {segments.map(seg => {
+          const pct = total > 0 ? (seg.chars / Math.max(total, stats.contextLimitChars)) * 100 : 0;
+          return (
+            <div
+              key={seg.label}
+              className={`${seg.color} transition-all`}
+              style={{ width: `${Math.max(pct, 0.5)}%` }}
+              title={`${seg.label}: ~${(seg.chars / 4).toFixed(0)} tokens`}
+            />
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+        {segments.map(seg => (
+          <span key={seg.label} className="flex items-center gap-1 text-[9px] text-muted-foreground">
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${seg.color}`} />
+            {seg.label}: ~{(seg.chars / 4).toFixed(0)}t
+          </span>
+        ))}
+        <span className="text-[9px] text-muted-foreground/60 ml-auto">
+          Total: ~{(total / 4).toFixed(0)} tokens
+        </span>
+      </div>
+    </div>
+  );
+}
+
 interface AgentMemoryPanelProps {
   agentId: string;
   agentName: string;
   roomId?: string;
+  agent?: Agent; // optional, for context window stats
   onClose: () => void;
 }
 
-export default function AgentMemoryPanel({ agentId, agentName, roomId, onClose }: AgentMemoryPanelProps) {
+export default function AgentMemoryPanel({ agentId, agentName, roomId, agent, onClose }: AgentMemoryPanelProps) {
   const [memories, setMemories] = useState<AgentMemoryFile[]>([]);
   const [scopeFilter, setScopeFilter] = useState<'all' | 'global' | 'local'>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | MemoryCategory>('all');
@@ -197,6 +275,11 @@ export default function AgentMemoryPanel({ agentId, agentName, roomId, onClose }
           })}
         </div>
       </div>
+
+      {/* Context Window Usage Indicator */}
+      {agent && (
+        <ContextWindowIndicator agent={agent} roomId={roomId} />
+      )}
 
       {/* File list */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">

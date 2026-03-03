@@ -1265,7 +1265,7 @@ export default function RoomView() {
       {memoryPanelAgentId && (() => {
         const agent = allAgents.find(a => a.id === memoryPanelAgentId);
         if (!agent) return null;
-        return <AgentMemoryPanel agentId={agent.id} agentName={agent.name} roomId={room.id} onClose={() => setMemoryPanelAgentId(null)} />;
+        return <AgentMemoryPanel agentId={agent.id} agentName={agent.name} agent={agent} roomId={room.id} onClose={() => setMemoryPanelAgentId(null)} />;
       })()}
     </div>
   );
