@@ -1,69 +1,276 @@
 
 
-# Memory & Prompt Optimization Plan
+# Product Requirements Document (PRD)
+## Idea Forge Lane — Multi-Agent Brainstorming Platform
 
-## Problems Identified
+---
 
-After reviewing `src/lib/llm.ts` and `src/lib/agentMemory.ts`, here are the root causes of agent degradation over time:
+## 1. Product Overview
 
-1. **Memory bloat in context window**: `getMemorySummaryForPrompt` dumps ALL memory files' full content into the system prompt. After a few rounds, this can consume 10-20K tokens of context, leaving little room for actual reasoning.
+Idea Forge Lane is a local-first, multi-agent AI brainstorming platform where users create "rooms" populated with independently configured AI agents that debate, research, and collaborate on topics. Data persists in browser localStorage with optional cloud sync via Lovable Cloud. The platform supports timed meetings, autonomous research loops, persistent agent memory, modular skills, tool use (web search, code execution, MCP), and a task management system.
 
-2. **Research loop token cap too low (1500)**: Line 531 caps research loop output at 1500 tokens. Agents can't produce substantive analysis in that budget, leading to shallow "I'll look into X" outputs instead of real findings.
+---
 
-3. **No conversation history pruning**: `buildChatMessages` sends ALL messages. After 10+ exchanges, the history alone can exceed the context window, pushing out the system prompt and memories.
+## 2. Core Entities & Data Model
 
-4. **Redundant inner-thoughts pass after research**: After completing research loops (which already produce private analysis), there's a SECOND "thinking" pass (lines 591-613) that wastes tokens repeating what was already analyzed.
+### 2.1 Agents (`Agent`)
+- **Identity**: name, role, domain, point of view, system prompt, style/voice
+- **LLM Config** (`AgentConfig`): provider, model, baseUrl, temperature, topP, maxTokens, presencePenalty, frequencyPenalty
+- **Work Style**: `proactive` (autonomous expert), `collaborative` (builds on ideas), `critical` (devil's advocate) — each injects distinct system prompt directives
+- **Permissions**: webSearch, fileRead, fileWrite, codeExecution (boolean flags)
+- **Memory**: enabled/disabled, scope default (global/local/both), `memoryTokenBudget` (500-8000 chars), `historyWindowSize` (5-50 messages)
+- **Research Loops**: 0-5 private iterations before public response
+- **Skills**: array of skill IDs attached to the agent
+- **MCP Servers**: array of `McpServerConfig` (id, name, url, tools[], enabled, authType, authToken, authHeader)
+- **Color Index**: for UI avatar coloring
 
-5. **Memory injected twice in research loops**: The base `system` prompt already includes memories (via `buildSystemMessage` line 103), then the research prompt injects them AGAIN at line 486. Double the tokens for the same content.
+### 2.2 Rooms (`Room`)
+- **Metadata**: title, goal, constraints, audience, successCriteria
+- **Agent Assignment**: agentIds[]
+- **Orchestration**: `manual` | `sequence` | `loop` | `auto`
+  - sequence: ordered agent turns via `sequenceOrder[]`
+  - loop: repeated rounds via `loopCount`
+  - auto: AI-driven turn selection
+- **Balance Slider**: 0 (realistic debate) to 100 (equal participation)
+- **Documents**: uploaded reference documents (`RoomDocument[]`) with extracted text content
+- **Meetings**: `MeetingSession[]` with active meeting tracking
+- **Summarizer Override**: per-room summarizer provider/model settings
 
-6. **Long-term summary grows unbounded**: The `running-summary.md` just appends text, keeping stale content from early conversations at the top while newer, more relevant content gets truncated.
+### 2.3 Messages (`Message`)
+- roomId, agentId (null for user/system), role (user/agent/system/summarizer)
+- `innerThoughts`: private reasoning visible to user but not to other agents
+- `codeBlocks`: structured code execution results with language, output, label, context (public/inner)
+- Metadata: tokensUsed, latencyMs, model, provider
+- parentId for branching support
 
-7. **No relevance filtering**: All memories are injected regardless of whether they relate to the current topic. An agent researching "EV markets" gets memories about a previous "blockchain" conversation too.
+### 2.4 Meeting Sessions (`MeetingSession`)
+- Topic, goals, additionalInfo, documents
+- Duration (minutes), status: scheduled → active → wrap-up → ended
+- **Templates**: Brainstorm, Sprint Retro, Design Review, Strategy, Debate, Decision — each with preset topic, goals, and duration
 
-## Plan
+### 2.5 Provider Config (`ProviderConfig`)
+- Supported providers: Lovable AI (built-in, no key), OpenAI, Anthropic, Gemini, Azure, Ollama, Custom
+- API key, base URL, active/inactive toggle
+- `secretStored` flag for server-side key storage
 
-### 1. Smart memory injection with budget and relevance (`src/lib/agentMemory.ts`)
+### 2.6 Skills (`Skill`)
+- name, description, version, author, icon (emoji), category
+- **Triggers**: keywords/phrases that activate the skill
+- **Required Permissions**: webSearch, codeExecution, fileRead, fileWrite
+- **Input Schema**: typed fields (string, number, boolean, text)
+- **Steps** (`SkillStep[]`): ordered instructions with optional toolHint, outputKey, embedded code (JS/Python), codeMode (auto-execute/reference)
+- **Code Files** (`SkillCodeFile[]`): standalone code bundled with the skill
+- **Output Format**: markdown template
+- **Built-in Skills**: 4 starter skills seeded on first load
+- **Import**: JSON manifest or ZIP (manifest.json + code files)
 
-- Add a `MEMORY_TOKEN_BUDGET` constant (default 2000 chars ~500 tokens)
-- New function `getCompactMemorySummary(agentId, roomId, currentTopic?)` that:
-  - Prioritizes room-local memories over global
-  - Prioritizes research > long-term > short-term
-  - For each memory file, includes only the first 300 chars + a "..." truncation marker
-  - Stops adding memories when the budget is reached
-  - Optionally filters by simple keyword overlap with `currentTopic`
+### 2.7 Agent Memory (`AgentMemoryFile`)
+- **Scopes**: `global` (cross-room) or room-specific (string = roomId)
+- **Categories**: long-term, short-term (auto-pruned, max 20), research, task, scratch
+- **Priority hierarchy**: research (3) > long-term/task (2) > short-term (1) > scratch (0)
+- **Budget-aware injection**: `getCompactMemorySummary()` with configurable `memoryTokenBudget`, keyword-based relevance scoring, truncation per file (300 chars)
+- **Auto-consolidation**: rolling `running-summary.md` (last 3 blocks) in global long-term memory
+- **Auto-pruning**: short-term files capped at 20 per agent
 
-### 2. Conversation history sliding window (`src/lib/llm.ts`)
+### 2.8 Tasks (`AgentTask`)
+- roomId, title, description, status (todo/in-progress/done/blocked), priority (low/medium/high)
+- assigneeAgentId, createdByAgentId
+- deliverable field for completed tasks
+- Agents create/update tasks via structured commands: `TASK_CREATE|` and `TASK_UPDATE|`
 
-- In `buildChatMessages`, keep only the last N messages (e.g., 20) plus always include the first 2 messages (for context setup)
-- Add a `MAX_HISTORY_MESSAGES = 20` constant
-- This prevents context window overflow in long conversations
+---
 
-### 3. Increase research loop token cap (`src/lib/llm.ts`)
+## 3. LLM Integration & Inference Pipeline
 
-- Change line 531 from `maxTokens: Math.min(agent.config.maxTokens, 1500)` to `Math.min(agent.config.maxTokens, 3000)`
-- Gives agents enough room to produce real analysis in each research step
+### 3.1 Provider Routing
+- **Lovable AI**: routed through edge function (`agent-chat`), no API key needed
+- **OpenAI/Azure/Ollama/Custom**: OpenAI-compatible API calls (direct or via edge function if key stored server-side)
+- **Anthropic**: native API with `anthropic-dangerous-direct-browser-access` header
+- **Gemini**: native Generative Language API
+- **Backend mode**: optional Node.js proxy server (`server/index.js`) for local deployments
+- **Edge function proxy**: `supabase/functions/agent-chat` handles tool-calling loop, provider key resolution from `user_provider_credentials` table
 
-### 4. Skip redundant thinking pass when research loops ran (`src/lib/llm.ts`)
+### 3.2 System Prompt Construction (`buildSystemMessage`)
+1. Base identity: name, role, domain, POV, style
+2. Reference documents injection (full text)
+3. Meeting context injection (topic, goals, time remaining, phase)
+4. Memory injection via `getCompactMemorySummary()` (budget-aware, relevance-filtered)
+5. Work style directive (proactive/collaborative/critical)
+6. Skills prompt block via `buildSkillsPromptBlock()` (matched by triggers and permissions)
 
-- When `researchLoops > 0`, skip the "Pass 1: Inner reasoning" block (lines 591-613) entirely
-- The research loops already produced thorough private analysis — doing it twice wastes 1000+ tokens and dilutes focus
+### 3.3 Conversation History (`buildChatMessages`)
+- Sliding window: first 2 messages (context setup) + last N messages (default 20, configurable per agent)
+- Other agents' messages formatted as `[Name (Role)]: content`
+- Inner thoughts are NEVER shared between agents
+- Summarizer messages prefixed with `[Summarizer]:`
 
-### 5. Fix double memory injection in research loops (`src/lib/llm.ts`)
+### 3.4 Research Loops (Private Iterations)
+- 0-5 configurable loops per agent before public response
+- Each loop: structured prompt with task planning, memory guidelines, anti-pattern directives
+- **Step 1**: decompose into sub-tasks, write strategy to memory
+- **Subsequent steps**: execute planned sub-tasks, produce artifacts
+- **Final step**: self-critique + structured findings report
+- Token cap: 3000 per loop iteration
+- Memory writes forced to short-term/research only (no long-term during research)
+- Tool calls (web search, code execution, MCP) available during research
+- Task management commands available during research
+- Progress reporting via `onLoopProgress` callback
 
-- Remove the memory injection from the research `researchSystem` prompt (line 486) since it's already in the base `system` prompt from `buildSystemMessage`
-- OR: remove it from `buildSystemMessage` during research mode and only inject the freshest version in each loop iteration (preferred — ensures each loop sees updated memories)
+### 3.5 Inner Reasoning (Chain of Thought)
+- **Only runs when research loops = 0** (skip if research already happened)
+- Private thinking pass analyzing key points, unique perspective, strategy
+- Capped at 1024 tokens
+- Injected as `[PRIVATE CONTEXT]` in Pass 2 history
 
-### 6. Smarter long-term memory consolidation (`src/lib/llm.ts`)
+### 3.6 Public Response (Pass 2)
+- Tool descriptions injected if enabled
+- Anti-leak guard: strips any `[PRIVATE CONTEXT]` markers from output
+- Strips model artifacts like `PUBLIC RESPONSE:` prefixes
+- Code blocks extracted from markdown for structured display
 
-- Replace the append-only `running-summary.md` strategy (lines 710-728) with a rolling window: keep only the last 3 update blocks instead of trimming by character count
-- This ensures the most recent and relevant context is preserved
+### 3.7 Post-Response Memory Management
+- Auto-save current response as short-term working note
+- Auto-consolidate rolling long-term summary (last 3 blocks, max 4000 chars)
 
-### 7. Stronger "don't quit" directive in research prompts (`src/lib/llm.ts`)
+### 3.8 Summarizer
+- 4 actions: `summarize`, `decisions`, `actionPlan`, `updateMemory`
+- Uses room-level or global summarizer settings, falls back to Lovable AI
+- Temperature: 0.3, maxTokens: 2048
 
-- Add explicit anti-patterns to the research loop prompt: "Do NOT end with 'I'll investigate further' or 'More research needed' — deliver what you have NOW"
-- Add to the final response prompt: "Do NOT say 'I have completed my analysis' — instead present your findings directly"
+---
 
-### Files to modify
-- `src/lib/agentMemory.ts` — add compact memory summary with budget
-- `src/lib/llm.ts` — history pruning, skip redundant thinking pass, fix double injection, increase research token cap, better prompts, smarter consolidation
+## 4. Tool Capabilities
+
+### 4.1 Web Search
+- Wikipedia and Google search (via edge function)
+- AI-synthesized results using agent's provider
+- Sources tracked and displayed
+
+### 4.2 Code Execution
+- JavaScript execution in sandboxed environment (edge function)
+- Code and output displayed as structured `CodeBlockMeta`
+- Results included in public response markdown
+
+### 4.3 MCP (Model Context Protocol)
+- Per-agent MCP server configuration
+- Auth types: none, bearer token, API key (custom header)
+- Session initialization + tool discovery + tool calling
+- Built-in test server (`mcp-test-server`) with getWeather, calculate, randomFact
+- Local MCP server (`tools-local-mcp-server.mjs`) with read_file, write_file, run_javascript, run_python
+- JSON RPC protocol support
+
+---
+
+## 5. Pages & UI
+
+### 5.1 Dashboard (`/`)
+- Room cards with title, goal, agent count, orchestration type, active meeting indicator
+- Create/delete room dialogs
+- Meeting history navigation
+
+### 5.2 Room View (`/room/:id`) — "Pare" Aesthetic
+- **Header**: app name left, room title center, leave/settings/orchestration buttons right
+- **Left Sidebar** (tabs):
+  - **Agents**: large circular avatars with earth-tone colored backgrounds, name, role subtitle
+  - **Summary**: meeting notes textarea, document management, task board, meeting history, balance slider, agent memory panels
+- **Meeting Status Bar**: "Round X of Y · Time Remaining", "Next Argument: [agent] is currently constructing..."
+- **Chat Area**: warm cream background, earth-tone colored speech bubbles (`rounded-2xl`), agent name above bubble
+- **Summarizer Actions**: Summarize, Decisions, Action Plan, Update Memory buttons
+- **Bottom Bar**: "Interact with the board..." input, send button, conclude/summarize actions
+- **Context Window Indicator**: color-coded breakdown (system prompt, memory, history) with token estimates
+
+### 5.3 Agents Page (`/agents`)
+- Agent cards with create/edit/delete
+- Full agent editor: identity, LLM config, permissions, work style, memory settings (token budget slider 500-8000, history window slider 5-50), skills, MCP servers, research loops
+
+### 5.4 Skills Page (`/skills`)
+- Skill cards with expandable details (steps, code files, permissions, triggers)
+- 4-step creation wizard: Basics → Steps → Code Files → Output
+- JSON install dialog + ZIP import
+- Export as JSON
+
+### 5.5 Providers Page (`/providers`)
+- Add/edit/delete provider configurations
+- Lovable AI (built-in), OpenAI, Anthropic, Gemini, Azure, Ollama, Custom
+- API key management (show/hide, server-side storage)
+- Ollama auto-detection
+- Local dev mode toggle
+
+### 5.6 Settings Page (`/settings`)
+- Authentication toggle (password-based session auth for local server)
+- Chat bubble mode toggle
+
+### 5.7 Admin Page (`/admin`) — admin role required
+- Tabs: Rooms, Agents, Users, Models
+- Room/meeting/agent snapshot tables from cloud
+- User role management (admin/user)
+- Model policy: toggle allowed models per provider
+
+### 5.8 Meeting History (`/room/:id/history`)
+- Timeline of past meetings with contribution analysis
+- Markdown and PDF export
+
+### 5.9 Login Page (`/login`)
+- Supabase Auth email/password login
+
+---
+
+## 6. Backend Services (Lovable Cloud / Supabase Edge Functions)
+
+| Function | Purpose |
+|---|---|
+| `agent-chat` | LLM proxy with tool-calling loop (web search, code exec, MCP) |
+| `provider-secrets` | CRUD for encrypted user provider credentials |
+| `generate-persona` | AI-generated agent persona from description |
+| `extract-document` | Text extraction from uploaded documents (vision + AI cleanup) |
+| `admin-users` | User listing and role management (service role) |
+| `model-policy` | Allowed model whitelist per provider |
+| `mcp-test-server` | Demo MCP server for testing |
+
+---
+
+## 7. Data Persistence
+
+- **Primary**: browser localStorage (rooms, agents, messages, providers, meetings, settings, memories, skills, tasks)
+- **Cloud sync**: fire-and-forget snapshots to Supabase tables (`room_snapshots`, `meeting_snapshots`, `agent_snapshots`)
+- **Credentials**: encrypted server-side storage in `user_provider_credentials`
+- **Admin data**: `user_roles` table with RLS + `has_role()` security definer function
+
+---
+
+## 8. Authentication & Authorization
+
+- **Supabase Auth**: email/password signup/login with JWT
+- **Protected routes**: `ProtectedRoute` component wraps all non-login routes
+- **Admin role**: checked via `user_roles` table, `useAdminRole()` hook
+- **Edge function auth**: manual JWT verification using session access tokens
+- **Local server auth**: optional password-based session with encrypted storage
+- **Model policy**: admin-managed whitelist of allowed models per provider
+
+---
+
+## 9. Orchestration Modes
+
+| Mode | Behavior |
+|---|---|
+| `manual` | User triggers each agent response individually |
+| `sequence` | Agents respond in defined order (`sequenceOrder[]`) |
+| `loop` | Repeated rounds through all agents (`loopCount` times) |
+| `auto` | AI-driven turn selection based on conversation flow |
+
+---
+
+## 10. Future: GraphRAG Expert Memory (Planned)
+
+The current memory system (localStorage, category-based, keyword relevance) provides the foundation for a future **GraphRAG-based expert memory** system. Key integration points:
+
+- **Memory categories** (research, long-term, short-term, task, scratch) map to graph node types
+- **Scope system** (global vs room-local) maps to graph partitioning
+- **Relevance scoring** (keyword overlap) will be replaced by vector similarity + graph traversal
+- **Budget-aware injection** (`getCompactMemorySummary`) provides the interface that GraphRAG will implement
+- **Rolling summary consolidation** will be enhanced with entity extraction and relationship linking
+- **Skills system** can include GraphRAG query skills for specialized knowledge retrieval
+- **MCP integration** can expose GraphRAG as an external tool server
+
+The `AgentMemoryFile` interface, `writeMemoryFile()`, and `getCompactMemorySummary()` functions are the primary integration surfaces for replacing localStorage with a graph-backed store.
 
